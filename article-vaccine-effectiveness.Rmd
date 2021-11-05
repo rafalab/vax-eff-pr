@@ -1,14 +1,15 @@
 ---
-title: "Time-varying effectiveness of the mRNA-1273, BNT162b2 and Ad26.COV2.S vaccines against SARS-CoV-2 infections and COVID-19 hospitalizations and deaths: an analysis based on observational data from Puerto Rico"
+title: "Time-Varying Effectiveness of Three Covid-19 Vaccines in Puerto Rico"
 author: 
-  - M.M. Robles-Fontán, E.G. Nieves, I. Cardona-Gerena, and R.A. Irizarry
+  - R.A. Irizarry, M.M. Robles-Fontán, E.G. Nieves, and I. Cardona-Gerena 
 #date: "`r format(Sys.time(), '%B %e, %Y')`"
 output:
   bookdown::pdf_document2:
-    toc : no
+    number_section: FALSE
+    toc: FALSE
 linkcolor: blue
 bibliography: references.bib
-csl: nejm.csl
+csl: lancet.csl
 link-citations: yes
 ---
 
@@ -31,493 +32,214 @@ library(splines)
 library(kableExtra)
 library(RColorBrewer)
 library(scales)
+library(flextable)
+set_flextable_defaults(fonts_ignore=TRUE)
 ```
 
 ```{r, echo=FALSE, cache=TRUE}
 source("wrangle.R")
-
-total_cases <- prettyNum(sum(counts_cases$cases), big.mark = ",")
-
-vax_status <- brewer.pal(9, "Set1")## colors for vaccination status
-
-plot_manu_levels <- c("UNV", "MOD", "PFR", "JSN", "before", "after")
-manu_labels <- c(UNV = "Unvaccinated", MOD = "mRNA-1273", PFR = "BNT162b2", JSN = "Ad26.COV2.S", 
-                 before = paste("Before", format(delta_date, "%B %e, %Y")), after = paste("After", format(delta_date, "%B %e, %Y")))
-manu_colors <- c(UNV = vax_status[1], MOD = "#00BFC4", PFR = "#C77CFF", JSN = "#7CAE00", before = hue_pal()(9)[[1]], after = hue_pal()(9)[[6]])
-
-
-## WANING
-max_days <- expand.grid(ageRange = age_levels, manu = manu_levels[-1]) %>%
-  mutate(age=get_age(ageRange)) %>%
-  mutate(start = case_when(age>=75 & manu !="JSN" ~ make_date(2021, 1, 11),
-                           age>=75 ~ make_date(2021, 3, 3),
-                           age>=65 ~ make_date(2021, 3, 12),
-                           age>=55 ~ make_date(2021, 3, 29),
-                           age>=18 ~ make_date(2021, 4, 12),
-                           TRUE ~ make_date(2021, 5, 12))) %>%
-  mutate(start = case_when(manu=="MOD" ~ 28+14, 
-                           manu=="PFR" ~ 21+14, 
-                           manu=="JSN" ~ 14)+
-           as.numeric(start)) %>% 
-  mutate(max.day = as.numeric(analysis_last_day) - start) %>%
-  select(-start) %>%
-  filter(!(ageRange=="12-17" & manu != "PFR"))
-           
-
-
-## waning model for cases
-cases_exp <- compute_expected(unvax, outcome = "cases") %>%
-  mutate(rate = fit / poblacion) %>%
-  select(date, ageRange, gender, rate)
-
-##remove outlier
-waning_dat <- waning %>% left_join(cases_exp, by = c("date", "ageRange", "gender")) %>%
-  mutate(exp = rate * poblacion) %>% 
-  group_by(delta, manu, gender, date, day) %>%
-  mutate(tot_cases = sum(cases)) %>%
-  ungroup() %>%
- # filter(tot_cases<20) %>% ##remove outliers... day/date combos with too many cases 
-  select(-tot_cases) %>%
-  group_by(delta, ageRange, manu, day) %>%
-  summarize(obs = sum(cases), exp = sum(exp), .groups = "drop")
-
-
-### FIG 1 
-the_max_day <- max_days %>% 
-  filter(ageRange!="12-17") %>% 
-  group_by(manu) %>%
-  summarize(max.day = min(max.day))
-
-waning_fit <- waning_dat %>% 
-  filter(ageRange!="12-17") %>%
-  group_by(manu, day) %>%
-  summarize(obs = sum(obs), exp = sum(exp), .groups = "drop") %>%
-  left_join(the_max_day, by="manu") %>%
-  group_by(manu) %>%
-  do(fit_waning_model(., knots=c(60)))
-  
-waning_tab <- waning_fit %>% 
-  group_by(manu) %>%
-  arrange(day) %>%
-  summarize(days = unique(max.day),
-              day = day[which.max(fit)], 
-            max = fit[which.max(fit)], 
-            max.up=conf.high[which.max(fit)], 
-            max.lo=conf.low[which.max(fit)],
-            min = last(fit), 
-            min.up=last(conf.high), 
-            min.lo=last(conf.low)) %>%
-  mutate(manu = factor(manu, levels = manu_levels)) %>%
-  arrange(manu)
-
-## WANING FOR HOSPITAL
-
-## waning model for cases
-hosp_exp <- compute_expected(unvax, outcome = "hosp") %>%
-  mutate(rate = fit / poblacion) %>%
-  select(date, ageRange, gender, rate)
-
-##remove outlier
-waning_hosp_dat <- waning %>% 
-  left_join(hosp_exp, by = c("date", "ageRange", "gender")) %>%
-  mutate(exp = rate * poblacion) %>% 
-  group_by(delta, ageRange, manu, day) %>%
-  summarize(obs = sum(hosp), exp = sum(exp), .groups = "drop")
-
-
-### FIG 1B
-waning_hosp_fit <- waning_hosp_dat %>% 
- group_by(ageRange,manu,day) %>%
-  summarize(obs = sum(obs), exp = sum(exp), .groups = "drop") %>%
- filter(ageRange!="12-17") %>%
-  left_join(the_max_day, by="manu") %>%
-  group_by(manu) %>%
-  do(fit_waning_model(., knots = c(60), transf = function(x){exp(-x)})) 
-
-waning_hosp_tab <- waning_fit %>% filter(day>14) %>%
-  group_by(manu) %>%
-  arrange(day) %>%
-  summarize(day = day[which.max(fit)], 
-            max = fit[which.max(fit)], 
-            max.up=conf.high[which.max(fit)], 
-            max.lo=conf.low[which.max(fit)],
-            min = last(fit), min.up=last(conf.high), min.lo=last(conf.low)) %>%
-  mutate(manu = factor(manu, levels = manu_levels)) %>%
-  arrange(manu)
-
-
-## hosp by cases
-hosp_by_cases <- counts_cases %>% 
-  filter(manu != "JSN") %>%
-  filter(!(ageRange == "12-17" & !manu %in% c("UNV", "PFR"))) %>%
-  group_by(ageRange)%>%
-  do(fit_prob_model(., outcome = "hosp"))
-
-deaths_by_cases <- counts_cases %>% 
-  filter(manu != "JSN") %>%
-  filter(!(ageRange == "12-17" & !manu %in% c("UNV", "PFR"))) %>%
-  group_by(ageRange)%>%
-  do(fit_prob_model(., outcome = "deaths")) 
-
-ind <- which(deaths_by_cases$rate<10^-6) 
-deaths_by_cases[ind, c("rate", "conf.low", "conf.high")] <- 0
-
-### Final model hosp
-outcomes <- c("hosp", "deaths")
-final_models <- lapply(c("hosp", "deaths"), function(outcome){
-  
-  if(outcome == "hosp"){
-    gbreaks<- c(18, 45, 75, 85)
-    agebreaks <- c(18, seq(25, 85, 10))
-  } else{
-    gbreaks<- c(18, 45, 75, 85)
-    agebreaks <- c(18, seq(45, 85, 10))
-  }
-  dat <-  counts_cases %>% 
-    rename(obs = !!sym(outcome)) %>%
-    select(date, ageRange, gender, manu, obs, poblacion) %>%
-    mutate(ageRange = collapse_age_range(ageRange, agebreaks)) %>%
-    filter(!is.na(ageRange)) %>%
-    group_by(date, ageRange, gender, manu) %>%
-    summarize(obs = sum(obs),  poblacion = sum(poblacion), .groups = "drop") %>%
-    filter(poblacion>0) %>%
-    mutate(age = collapse_age_range(ageRange, gbreaks)) %>%
-    filter(!is.na(age)) %>%
-    mutate(group = ifelse(manu!="UNV", paste(as.character(manu), age, sep="_"), as.character(manu))) %>%
-    mutate(group = relevel(factor(group), ref= "UNV"))
-  
-  fit <- fit_model(dat)
-  ##check: dat %>% mutate(fit=fit$fitted.values) %>% filter(manu=="UNV") %>%ggplot(aes(date, fit,color = gender))+ geom_line() + facet_wrap(~ageRange)
-  
-  the_coefs <- str_subset(names(fit$coefficients), "group")
-  tab <- confint(fit, the_coefs) %>%
-    as_tibble() %>%
-    setNames(c("conf.high", "conf.low")) %>%
-    mutate(estimate = fit$coef[the_coefs],
-           group = str_remove(the_coefs,"group")) %>%
-    separate(group, c("group", "ageRange"), sep="_")  %>%
-    mutate(group = factor(group, levels = manu_levels)) %>%
-    relocate(group, ageRange, estimate, conf.low, conf.high) %>%
-    mutate_if(is.numeric, function(x) 1/exp(x)) 
-
-  pred <- predict(fit, se.fit = TRUE, type = "response")
-  
-  tmp <- fit$data %>% mutate(fit = pred$fit) 
-  e <- tmp %>%
-    filter(manu == "UNV") %>%
-    mutate(rate = fit/poblacion) %>%
-    select(date, ageRange, gender, rate)
-  
-  tmp <- tmp %>% left_join(e, by = c("date", "ageRange", "gender")) %>%
-    mutate(o = obs, e = rate*poblacion) %>%
-    group_by(manu) %>%
-    summarize(e=sum(e), o=sum(o), .groups = "drop")%>%
-    mutate(diff = e- o) %>%
-    filter(manu != "UNV")
-
-  list(rr = tab, excess = tmp)
-}) 
-names(final_models)<-outcomes
-
-
-wa_eff_mod <- waning_tab %>% filter(manu=="MOD") %>%
-  dplyr::select(day, max, max.lo, max.up, min, min.lo, min.up)
-
-day_mod <- wa_eff_mod$day
-
-wa_peak_mod <- make_pct(wa_eff_mod$max)
-wa_peak_mod_lo <- make_pct(wa_eff_mod$max.lo)
-wa_peak_mod_up <- make_pct(wa_eff_mod$max.up)
-
-wa_est_mod <- make_pct(wa_eff_mod$min)
-wa_est_mod_lo <- make_pct(wa_eff_mod$min.lo)
-wa_est_mod_up <- make_pct(wa_eff_mod$min.up)
-
-round_wa_est_mod <- paste0(round(100*wa_eff_mod$min,-1), "%")
-
-wa_eff_pfr <- waning_tab %>% filter(manu=="PFR") %>%
-  dplyr::select(day, max, max.lo, max.up, min, min.lo, min.up)
-
-
-day_pfr <- wa_eff_pfr$day
-
-wa_peak_pfr <- make_pct(wa_eff_pfr$max)
-wa_peak_pfr_lo <- make_pct(wa_eff_pfr$max.lo)
-wa_peak_pfr_up <- make_pct(wa_eff_pfr$max.up)
-
-
-wa_est_pfr <- make_pct(wa_eff_pfr$min)
-wa_est_pfr_lo <- make_pct(wa_eff_pfr$min.lo)
-wa_est_pfr_up <- make_pct(wa_eff_pfr$min.up)
-
-round_wa_est_pfr <- paste0(round(100*wa_eff_pfr$min,-1), "%")
-
-wa_eff_jsn <- waning_tab %>% filter(manu=="JSN") %>%
-  dplyr::select(day, max, max.lo, max.up, min, min.lo, min.up)
-
-day_jsn <- wa_eff_jsn$day
-
-wa_peak_jsn <- make_pct(wa_eff_jsn$max)
-wa_peak_jsn_lo <- make_pct(wa_eff_jsn$max.lo)
-wa_peak_jsn_up <- make_pct(wa_eff_jsn$max.up)
-
-wa_est_jsn <- make_pct(wa_eff_jsn$min)
-wa_est_jsn_lo <- make_pct(wa_eff_jsn$min.lo)
-wa_est_jsn_up <- make_pct(wa_eff_jsn$min.up)
-
-round_wa_est_jsn <- paste0(round(100*wa_eff_jsn$min,-1), "%")
-
-rollout <- readxl::read_xlsx("data/vax_rollout.xlsx") %>%
-  mutate(Date = format(Date, format="%B %e, %Y"))
-
-
-### totals for tables
-
-tmp <- counts_vax_age_gender_manu %>% filter(date == analysis_last_day) %>% group_by(manu) %>% summarize(n=sum(vax)) 
-vax_tots <- pull(tmp, n)
-names(vax_tots) <- pull(tmp, manu)
-
-first_vax_day <- counts_vax_age_gender_manu %>% filter(date<=analysis_last_day) %>%
-  filter(vax>0) %>% pull(date) %>% min
-tmp <- counts_cases %>% filter(date >= first_vax_day)
-ncases <- sum(tmp$cases)
-nhosp <- sum(tmp$hosp)
-ndeaths <- sum(tmp$deaths)
-
-vax_cases_tots <- tmp %>%
-  group_by(manu) %>%
-  summarize(cases = sum(cases),
-            hosp= sum(hosp),
-            deaths= sum(deaths),
-            poblacion = sum(poblacion)/365, .groups = "drop") 
-  
+source("prep-for-paper.R")
 ```
 
+R.A. Irizarry, Ph.D., Corresponding Author
 
-# Abstract {-}
+* Affiliations: Department of Data Science, Dana-Farber Cancer Institute, Department of Biostatistics, Harvard T.H. Chan School of Public Health
+* Address: CLSB 11007, 450 Brookline Ave, Boston, MA 02215
+* Email: rafael_irizarry@dfci.harvard.edu
+* Phone number: 617-632-2454
 
-**Background** 
-We collected hospitalization, death, and vaccination status data for all `r make_pretty(nrow(dat_cases_vax))` laboratory-confirmed SARS-CoV-2 infections in Puerto Rico since the first COVID-19 vaccine was administered starting on December 15, 2020 and ending `r format(analysis_last_day, format = "%B %e, %Y")`. Using these data we estimated real-world time-varying effectiveness of the  `r manu_labels[["MOD"]]` (Moderna), `r manu_labels[["PFR"]]` (Pfizer), and `r manu_labels[["JSN"]]` (J & J) COVID-19 vaccines to quantify the public health benefits of Puerto Rico's immunization campaign. Furthermore, we compared the effectiveness of the COVID-19 vaccines before and after the dominance of the Delta variant. As of this writing, Puerto Rico had a higher vaccination rate and lower SARS-CoV-2 infection rate than all 50 States in the USA.
+M.M. Robles-Fontán, MS
 
+* Affiliations: Digheontech, Inc. (until October 8, 2021), CDC Foundation-Puerto Rico Department of Health (since October 12, 2021)
+* Address: Programa de Vacunación, Centro Médico Norte, Calle Periferial Interior, Bo. Monacillos Río Piedras, PR
 
-**Methods** We used data obtained from the integration of the Puerto Rico Department of Health databases holding vaccination status, SARS-CoV-2 test results, and COVID-19 hospitalizations, and deaths. We estimated time-varying vaccine effectiveness against SARS-CoV-2 infections by fitting a statistical model that adjusts for time-varying incidence rates, age, gender, and day of the week. We also used this model to estimate the relative risk of hospitalization and deaths comparing vaccinated to unvaccinated individuals. Code and data are provided to reproduce the analysis here: \url{https://github.com/rafalab/vax-eff-pr}. 
+E.G. Nieves, HSDG
 
-**Results** All vaccines were effective at reducing risks for all outcomes across all age groups.  At the peak of their protection, `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` had an effectiveness of `r wa_peak_mod` (`r wa_peak_mod_lo` - `r wa_peak_mod_up`), `r wa_peak_pfr` (`r wa_peak_pfr_lo` - `r wa_peak_pfr_up`), and `r wa_peak_jsn` (`r wa_peak_jsn_lo` - `r wa_peak_jsn_up`). After four months, effectiveness waned to about `r round_wa_est_mod`, `r round_wa_est_pfr`, and `r round_wa_est_jsn` for `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]`, respectively. All vaccines had a lower effectiveness for those over 85 years, with the decrease in effectiveness particularly low for the `r manu_labels[["JSN"]]` vaccine. We found no clear evidence that effectiveness was different after the Delta variant became dominant. For those infected, the vaccines provided further protection against hospitalization and deaths across all age groups, although the protection was less for those above 85 years. Using the rates observed for the unvaccinated we would have observed `r make_pretty(round(sum(final_models$hosp$excess$e)))` and `r make_pretty(round(sum(final_models$deaths$excess$e)))` hospitalizations and deaths among the vaccinated population but we instead observed `r make_pretty(round(sum(final_models$hosp$excess$o)))` and `r make_pretty(round(sum(final_models$deaths$excess$o)))`, respectively. 
+* Affiliation: Puerto Rico Department of Health
+* Address: Programa de Vacunación, Centro Médico Norte, Calle Periferial Interior, Bo. Monacillos Río Piedras, PR
 
-**Conclusions** The `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]`  vaccines where highly effective across all age groups. They were still effective after four months although the protection did wain. The `r manu_labels[["JSN"]]` vaccine was effective but to a lesser degree, especially for the older age groups. 
+I. Cardona-Gerena, MD
 
-<!-- These findings suggest that COVID-19 vaccination has greatly helped to control the pandemic in Puerto Rico. -->
+* Affiliation: Puerto Rico Department of Health
+* Address: Programa de Vacunación, Centro Médico Norte, Calle Periferial Interior, Bo. Monacillos Río Piedras, PR
+
+\newpage
+
+# Abstract 
+
+**Background** On July 15, 2020, with 58% of the population fully vaccinated, the start of a COVID-19 surge was being observed in Puerto Rico. On July 22, 2021, the government commenced imposing a series of strict vaccine mandates. Two months later, over 70% of the population was vaccinated, more than in any US state, and laboratory-confirmed SARS-CoV-2 had dropped substantially. The decision to impose mandates, as well as current Department of Health recommendations related to boosters, were guided by the data and time-varying effectiveness estimates presented here.
+
+**Methods** Between December 15, 2020, when the vaccination process began in Puerto Rico, and `r format(analysis_last_day, "%B %e, %Y")`, `r make_pretty(sum(vax_tots))` individuals were fully vaccinated against COVID-19. During this period `r make_pretty(nrow(dat_cases_vax))` laboratory-confirmed SARS-CoV-2 infections have been reported. These data permitted us to quantify the outcomes of the immunization campaign and to compare effectiveness of the `r manu_labels[["MOD"]]` (Moderna), `r manu_labels[["PFR"]]` (Pfizer), and `r manu_labels[["JSN"]]` (J&J) vaccines.  We obtained vaccination status, SARS-CoV-2 test results, and COVID-19 hospitalizations and deaths, from the Department of Health. We fit statistical models that adjusted for time-varying incidence rates and age group to estimate time-varying vaccine effectiveness against lab-confirmed SARS-CoV-2 infection, and COVID-19 hospitalization and death. Code and data to reproduce the analyses are provided here: https://github.com/rafalab/vax-eff-pr. 
+
+**Results**  At their peak, the `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` vaccines had an effectiveness of `r wa_eff$MOD$max` (95% CI: `r wa_eff$MOD$max.lo`-`r wa_eff$MOD$max.up`), `r wa_eff$PFR$max` (`r wa_eff$PFR$max.lo`-`r wa_eff$PFR$max.up`), and, `r wa_eff$JSN$max` (`r wa_eff$JSN$max.lo`-`r wa_eff$JSN$max.up`) respectively.  After five months, effectiveness waned to about `r round_wa_est_mod`, `r round_wa_est_pfr`, and `r round_wa_est_jsn`, respectively.  We found no evidence that effectiveness was different after the Delta variant became dominant. For those infected, the vaccines provided further protection against COVID-19 hospitalization and deaths across all age groups, and this conditional effect did not wane in time.
+
+**Interpretation** The `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]`  vaccines were highly effective across all age groups. They were still effective after five months although the protection against SARS-CoV-2 infection waned. The `r manu_labels[["JSN"]]` vaccine was effective but to a lesser degree compared to the mRNA vaccines. Although, conditional on infection, protection against adverse outcomes did not wane, the waning in effectiveness resulted in a decreased protection against serious COVID-19 outcomes across time.
+
+**Funding** RAI's work was partly funded by NIH Grant R35GM131802.
 
 \pagebreak
 
 
-The first COVID-19 case was first reported on December 31, 2019. The race for a vaccine commenced shortly after. By fall 2020, there were several ongoing clinical trials for vaccines developed with full messenger RNA (mRNA) technology. 
-@pardi2018mrna 
-In the United States, three of the currently used COVID-19 vaccines were shown to be highly effective against infection, hospitalizations, and deaths in randomized double-blind trials. A two-dose series of `r manu_labels[["PFR"]]` (Pfizer) COVID-19 vaccine was shown to be 95% efficacious against symptomatic COVID-19 in individuals 16 and older. 
+
+## Introduction 
+
+The first COVID-19 case was first reported on December 31, 2019, and the race for a vaccine commenced shortly after. By fall 2020, there were several ongoing clinical trials for vaccines developed with full messenger RNA (mRNA) technology. @pardi2018mrna 
+In the United States, three of the currently used COVID-19 vaccines were shown to be highly effective against SARS-CoV-2 outcomes in randomized double-blind trials. A two-dose series of `r manu_labels[["PFR"]]` (Pfizer) COVID-19 vaccine was shown to be 95% efficacious against symptomatic COVID-19 in individuals 16 and older. 
 @CTPFR 
 Similarly, a two-dose series of `r manu_labels[["MOD"]]` COVID-19 provided 94% efficacy against symptomatic COVID-19 for those 18 and older. 
-@CTMOD Finally, a single-shot of the `r manu_labels[["JSN"]]` COVID-19 vaccine provided 66% protection for individuals 18 years and older. 
-@CTJanssen These findings led to emergency use approvals (EUA) by the Federal Drug Administration (FDA) for these three vaccines. Over 380 million doses of these vaccines have been administrated in the United States.
+@CTMOD Finally, a single-shot of the `r manu_labels[["JSN"]]` COVID-19 vaccine provided 66% protection against moderate to severe COVID-19 disease for individuals 18 years and older. 
+@CTJanssen These findings led to emergency use authorizations (EUA) by the Federal Drug Administration (FDA) for these three vaccines. In August 2021, the `r manu_labels[["PFR"]]` COVID-19 vaccine received FDA approval for the prevention of COVID-19 disease for individuals 16 years and older. @pfrApproval Over 380 million doses of these vaccines have been administrated in the United States. 
+
 
 Since the start of the vaccination process, the effectiveness of the COVID-19 vaccines has been estimated in several observational studies. 
-A population-based study performed early during the vaccination process in Israel estimated effectiveness to be 72% for the `r manu_labels[["PFR"]]` vaccine. @effIs
-A case-control study, also in Israel, found 87% effectiveness for the `r manu_labels[["PFR"]]` vaccine, however, lower protection against hospitalizations and deaths. @effPFR These estimates have been questioned due to lack of adjustment for age.
-A study conducted in inpatient care settings, across 187 hospitals in the United States, compared all three vaccines found the `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` COVID-19 vaccines were found to be highly effective against hospitalization and death.
+A population-based study performed early during the vaccination process in Israel estimated the `r manu_labels[["PFR"]]` vaccine effectiveness against infection to be 66-85% and over 90% against COVID-19 hospitalization. @effIs
+A matched cohort study, also in Israel, found 92% effectiveness against SARS-CoV-2 infection, 87% effectiveness for hospitalizations, and 72% effectiveness at preventing COVID-19 death for the `r manu_labels[["PFR"]]` vaccine. @effPFR 
+A study conducted in inpatient care settings, across 187 hospitals in the United States,  found that the `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` COVID-19 vaccines were highly effective against COVID-19 related hospitalization, ICU admission, and emergency department or urgent care clinic visit. 
 @thompson2021effectiveness
-Other observational studies have estimated vaccine effectiveness in the midst of variants of concern. The effectiveness against infection in the dominance of the Delta (B.1.617.2) variant has been shown to remain at 88% for the `r manu_labels[["PFR"]]` COVID-19 vaccine. 
+Other observational studies have estimated vaccine effectiveness amid variants of concern. The effectiveness against SARS-CoV-2 infection in the dominance of the Delta (B.1.617.2) variant has been shown to remain at 88% for the `r manu_labels[["PFR"]]` COVID-19 vaccine. 
 @effDelta 
-Similarly, in a population-based observational study found that two doses of the `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]` COVID-19 vaccines provided substantial protection against the Alpha (B.1.1.7), Beta (B.1.351), Gamma (P.1), and Delta variants of concern. @effVOCs  Nonetheless, real-world population based estimates of the 
-`r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` COVID-19 vaccines effectiveness against infections, hospitalizations and deaths is still limited.
-Here we add to these findings by examining the effect of vaccines on all laboratory-confirmed SARS-CoV-2 infections observed in Puerto Rico since the vaccination process started, which provided enough power to estimate effectiveness across age groups and as function of time since the individuals are considerd fully vaccinated (14 days after final dose).
+Similarly, a population-based observational study found that two doses of the `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]` COVID-19 vaccines provided substantial protection against the Alpha (B.1.1.7), Beta (B.1.351), Gamma (P.1), and Delta variants of concern. @effVOCs  Nonetheless, real-world estimates comparing the 
+`r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` COVID-19 vaccines effectiveness against SARS-CoV-2 infections, COVID-19 hospitalizations and deaths, that consider time since initial inoculation, on the same population, is still limited.
+Here we add to these findings by examining the effect of vaccines on all laboratory-confirmed SARS-CoV-2 infections observed in Puerto Rico since the vaccination process started, which provided enough power to estimate effectiveness across age groups and as a function of time since the individuals are considered fully vaccinated (two weeks after final dose).
 
 Following the emergency approval of the `r manu_labels[["PFR"]]` vaccine manufactured by Pfizer-BioNTech on 
 December 11, 2020, vaccine administration began in Puerto Rico on December 15, 2020. The logistics of the vaccination process proposed by the Puerto Rico Department of Health established that the vaccine administration would be completed in phases, as 
-recommended by the World Health Organization (WHO) and the Centers for Disease Control and Prevention (CDC). @vax_plan The phases (Supplementary Table \@ref(tab:tab-1)) consisted on vaccinating populations that were at greater risk of infection and severe disease. For example, front line health care workers and people 65 years and older were vaccinated in the first phases.
+recommended by the World Health Organization (WHO) and the Centers for Disease Control and Prevention (CDC). @vax_plan The phases (appendix table \@ref(tab:tab-1)) consisted of vaccinating populations that were at greater risk of infection and severe disease. Front line health care workers and people 65 years and older were vaccinated in the first phase of the vaccination rollout.
 
-By `r format(last_day, "%B %e, %Y")` more than 2 million of the `r make_pretty(pr_pop)` individuals living in Puerto Rico had completed the COVID-19 vaccination series. Furthermore, since the start of the vaccination process to `r format(last_day, "%B %e, %Y")`,  `r make_pretty(nrow(dat_cases_vax))` cases have been detected with molecular or antigen tests in Puerto Rico with two surges, one starting in late March after restrictions were lifted and another in late June with the arrival of the Delta variant. We leveraged data collected by the Puerto Rico Department of Health to study the effect the vaccination process in preventing SARS-CoV-2 outcomes by comparing unvaccinated individulas 12 years or older to those who had completed the vaccination series (two weeks after final dose) for `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, or `r manu_labels[["JSN"]]` COVID-19 vaccines. In particular, we provide estimates of the effectiveness of the three COVID-19 vaccines protecting against infections, hospitalizations, and deaths to quantify the public-health impact of the vaccine in Puerto Rico.
+By `r format(last_day, "%B %e, %Y")` more than 2 million of the `r make_pretty(pr_pop)` individuals living in Puerto Rico had completed the COVID-19 vaccination series. Furthermore, since the start of the vaccination process to `r format(last_day, "%B %e, %Y")`,  Puerto Rico experienced two SARS-CoV-2 infections surges, one starting in late March after restrictions were lifted and another in late June with the arrival of the Delta variant.  For this period, `r make_pretty(nrow(dat_cases_vax))` SARS-CoV-2 infections have been detected. We leveraged data collected by the Puerto Rico Department of Health to study the effect of the vaccination process in preventing SARS-CoV-2 outcomes by comparing unvaccinated individuals 12 years or older to those who had completed the vaccination series (two weeks after final dose) for `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, or `r manu_labels[["JSN"]]` COVID-19 vaccines. We provide estimates of the effectiveness of the three COVID-19 vaccines protecting against SARS-CoV-2 infections, COVID-19 hospitalizations, and deaths to quantify the public health impact of the vaccine in Puerto Rico.
 
+# Methods 
 
-# Methods {-}
 
-## Data sources {-}
+## Statistical analyses
 
-Two Puerto Rico Department of Health databases were integrated: the BioPortal, which stores test results, most hospitalizations, and deaths, and the Puerto Rico Electronic Immunization System (PREIS), which stores vaccination related data. For the analysis in this study we used daily counts of laboratory-confirmed SARS-CoV-2 infections, hospitalizations, and deaths from  `r format(min(counts_cases$date), "%B %e, %Y")` to `r format(max(counts_cases$date), "%B %e, %Y")`. We defined the first day to which an individual tested positive to a molecular or antigen test as the day of the infection. This same date was used for the analyses involving hospitalizations and deaths. 
+Here we describe the approach used to estimate vaccine effectiveness as a function of time since becoming fully vaccinated. Note that this is different from estimating effectiveness as a function of calendar date since the date individuals became fully vaccinated vary from January to October. Because the vaccination process started at different dates for the different age groups and Puerto Rico had two SARS-CoV-2 infections surges during the study period, we had to develop a  statistical analysis that accounted for time-varying incidence rates and age. Below we provide a general description, with the mathematical details in the appendix. 
 
-These daily counts were stratified by gender, age group (`r str_replace(paste(levels(counts_cases$ageRange), collapse=", "), ", 85", ", or 85")`) and vaccination status 
-(unvaccinated, `r paste0(manu_labels[2], ", ", manu_labels[3], ", or ", manu_labels[4])`). Fully vaccinated was defined as 14 days after the final dose in the vaccine series. Cases in which the infection occurred after the first dose but before being fully vaccinated were removed from the analysis. Furthermore, the analysis was applied to two periods, before and after `r format(delta_date, "%B %e, %Y")`, the approximate date in which the Delta variant became dominant in Puerto Rico. 
+### Estimating time-varying effectiveness
 
+We denoted an individual as fully vaccinated two weeks after the date they received the final dose in the COVID-19 vaccine series. SARS-CoV-2 infections in which the laboratory confirmation occurred after the first dose but before being fully vaccinated were removed from the analysis. For SARS-CoV-2 infections in which the laboratory confirmation occurred after being fully vaccinated, we recorded the number of days the individual had been fully vaccinated on the date their positive test was recorded. We denoted this value with $d$. Then for each date $t$ and each demographic stratum (defined by age group and gender) we computed the number of laboratory-confirmed SARS-CoV-2 infections among those that had been vaccinated for $d$ days. We denoted these counts with $Y_{t,d}$. To compute rates, we calculated, for each date $t$, the number of individuals in this stratum that became fully vaccinated $d$ days before a date $t$. We denoted this population size with $N_{t,d}$. 
 
-## Statistical analyses {-}
+To estimate the time varying relative risk as a function $d$, denoted with $RR(d)$, we assumed that the counts $Y_{t,d}$ followed a Poisson distribution with rate $N_{t,d} \times \mu_{t} \times RR(d)$, with $\mu_t$ the rate for the unvaccinated on date $t$, and $RR(d)$ a smooth function of $d$. Note that $1-RR(d)$ is equivalent to vaccine effectiveness.
 
-We applied models that accounted for age, gender, and, since many more tests were performed on weekdays than weekends, day of the week. We used the estimates obtained from fitting these models to quantify effectiveness and relative risks. The models used for the different analyses are described below. 
-<!--The code and data needed to reproduce these analyses is here: \url{https://github.com/rafalab/casos-vacunados-pr}. 
--->
+To estimate $\mu_{t}$ we computed the number of laboratory-confirmed SARS-CoV-2 infections among the unvaccinated in the same demographic group, and, to compute rates, we calculated, for each date $t$, the number of individuals in the stratum that were unvaccinated and had not been infected within the last three months. With this estimate in place, we can use a generalized linear model to estimate $RR(d)$, and point-wise confidence intervals for each vaccine manufacturer, using data from all strata. Details are included in the appendix.
 
-### Time-varying effectiveness against infection by age, manufacturer{-}
+Note that this model can be fit to any demographic strata and any vaccine manufacturer to obtain time-varying vaccine effectiveness in these contexts. Furthermore, the approach can be applied to COVID-19 hospitalization or deaths by simply redefining  $Y_{t,d}$ with these outcomes rather than laboratory-confirmed SARS-CoV-2 infections. 
 
-We defined $Y^{(v)}_{t,d,a,g}$ as the number of laboratory-confirmed SARS-CoV-2 infections observed on day $t$ for individuals of gender $g$ (male or female)
-and age group $a$ (`r str_replace(paste(levels(counts_cases$ageRange), collapse=", "), ", 85", ", or 85")`),
-that were fully vaccinated with vaccine $v$ (`r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, or `r manu_labels[["JSN"]]`), $d$ days previous to the positive test. We assumed these counts followed an over-dispersed Poisson distribution with expected rate defined by
 
+### Estimating time-varying risk of hospitalization and death conditioned on a laboratory-confirmed SARS-CoV-2 infection 
 
-\begin{equation}
-\label{eq:model}
-\mbox{E}\left(Y^{(v)}_{t,d,a,g}\right) = N^{(v)}_{t,d,a,g} \, \mu_{a,g}(t) \, \exp\left\{\beta^{(v)}_{a}(d)\right\}.
-\end{equation}
+Note: in this section, to avoid introducing more mathematical symbols, we re-purpose the $Y$ and $N$ notation. 
 
-Here $N^{(v)}_{t,d,a,g}$ is the population size on day $t$ of individuals of gender $g$, age group $a$ that were fully vaccinated with vaccine $v$, $d$ days before day $t$, $\mu_{a,g}(t)$ is the incidence rate on date $t$ among the non-vaccinated individuals of gender $g$ and age $a$, and $\beta^{(v)}_{a}(d)$ is the age-specific log relative risk of vaccine $v$, $d$ days after the first dose was administered. Note the the transformation  $f(x) = 1 - \exp(x)$ can be used to convert from relative risk to effectiveness. Since incidence changes across demographic groups and across days of the week (more tests performed on Mondays and less on Sundays, for example) we modeled the $\mu_{a,g}(t)$ as 
+To estimate the further protection provided by the vaccine in reducing adverse outcomes (COVID-19 hospitalizations or deaths) among infected individuals we examined the proportion of SARS-CoV-2 infections that had COVID-19 hospitalizations or deaths. Specifically, for each date $t$ and each demographic stratum we computed the number of laboratory-confirmed SARS-CoV-2 infections with an adverse outcome (COVID-19 hospitalization or death) among those that had been vaccinated for $d$ day. We denoted these counts with $Y_{t,d}$. Note that now, instead of obtaining the population from all vaccinated individuals to compute rates, we only considered individuals with laboratory-confirmed SARS-CoV-2 infections. Therefore, for each date $t$, we defined $N_{t,d}$ as the number of individuals in this stratum with laboratory-confirmed SARS-CoV-2 infections among those that had been vaccinated for $d$ day. We then assumed that $Y_{t,d}$ followed a binomial distribution with $N_{t,d}$ trials and success probability $p(d)$ assumed to be a smooth function of $d$. The probability $p(d)$ represents the time-varying risk of the adverse outcome conditional on infection. We compared this function to the conditional risk of unvaccinated individuals for each demographic group computed as the proportion of laboratory-confirmed unvaccinated individuals having adverse outcomes.
 
-$$
-\log\{\mu_{a,g}(t) \}=  \alpha_g + f_a(t) + \sum_{w=1}^7 \gamma_{w} 1_{w}(t)  \mbox{ with } \sum_{g=1}^2 \alpha_{g} = 0  \mbox{ and } \sum_{w=1}^7 \gamma_{w} = 0
-$$
+Note that this model can be fit to any demographic stratum and any vaccine manufacturer to obtain time-varying risks in these contexts. 
 
-with $\alpha_{g}$ a gender effect, $f_a(t)$ a cubic-spline representing an age-specific trend that accounts for the 
-change in incidence across time, and $1_{w}(t)=1$ indicator functions for each day of the week $w \in \{\mbox{Sunday}, \mbox{Monday}, \dots \mbox{Friday}\}$. To estimate $\mu_{a,g}(t)$ we assumed laboratory-confirmed SARS-CoV-2 infections counts for non-vaccinated individuals, denoted with $Y^{(u)}_{a,g}$, follow a Poisson distribution with rate $\mu_{a,g}(t)$ and  obtained the MLE for all parameters using Iteratively Reweighted Least Square algorithm, as implemented by the _glm_ function in R. We then used these to define the MLE for $\mu_{a,g}(t)$ and denoted it with $\hat{\mu}_{a,g}(t)$. With this estimate in place we then estimated the parameter of interest $\beta_a^{(v)}$ by treating $\mu_{a,g}(t)$ in $\eqref{eq:model}$ as a known value, plugged in $\hat{\mu}_{a,g}(t)$, and noting that 
-$\sum_{t} Y^{(v)}_{t,d,a,g}$ follows a Poisson distribution with expected value 
+**Funding** NIH Grant R35GM131802 funded the work do RAI developing these statistical methods.
 
-\begin{equation}
-\label{eq:sum}
-\mbox{E}\left\{\sum_{t} Y^{(v)}_{t,d,a,g}\right\} = \left\{\sum_{t} N^{(v)}_{t,d,a,g} \mu_{a,g}(t)\right\} \, \exp\left\{\beta^{(v)}_{a}(d)\right\}.
-\end{equation}
+# Results
 
-Because the first term on the right is treated as known, if we assume $\beta^{(v)}_{a}(d)$ is a cubic-spline, then the model defined by $\eqref{eq:sum}$ is reduced to a simple generalized linear model and we find the MLE $\beta^{(v)}_{a}(d)$ again using Iteratively Reweighted Least Square.
+## Vaccination data
 
-### Relative risk of hospitalization and death  {-}
+As of `r format(analysis_last_day, "%B %e, %Y")`, `r make_pretty(sum(vax_tots))` of the `r make_pretty(pr_pop)` individuals living in Puerto Rico had been fully vaccinated: `r make_pretty(vax_tots["PFR"])` with `r manu_labels[["PFR"]]`, `r make_pretty(vax_tots["MOD"])` with `r manu_labels[["MOD"]]`, and `r make_pretty(vax_tots["JSN"])` with `r manu_labels[["JSN"]]`. The daily COVID-19 vaccination rates were high during the first four months of the vaccination process, successfully vaccinating 50% of the eligible population (1,442,459 of 2,848,293) with at least one dose of a COVID-19 vaccine. @CIFRAS However, daily vaccination rates decreased after reaching 50%. The decrease in daily rate was particularly noticeable among the older age groups. After several vaccine mandates were implemented in July and August, the rate commenced increasing again (figure \@ref(fig:vax)) and by October 17, 2020, over 70% of the population was vaccinated, more than in any US state. With the exception of pediatric population (12-17 year old children) who were only vaccinated with `r manu_labels[["PFR"]]`, the age distribution of the vaccine was similar for all vaccine manufacturers (appendix figure \@ref(fig:vax-age)). However, the age distribution of the vaccinated population was different before and after Delta became dominant (appendix table \@ref(tab:vax-before-after-delta)).
 
-Note that we can use this model for the hospitalization and deaths outcomes by simply redefining the counts $Y^{(v)}_{t,d,a,g}$ based on counts of these outcomes. Since we observed less hospitalization and death data than for infections, to increase power we also ran an analysis that assumed $\beta^{(v)}_{a}(d)$ was constant across $d$ and the same across age groups. Specifically we assumed that the age groups 
-`r str_replace(paste(unique(final_models$hosp$rr$ageRange), collapse=", ") , ", 85", ", and 85")` 
-shared the same $\beta^{(v)}_{a}(d)$. We then fit model $\eqref{eq:model}$ to obtain estimates for the relative risks.
+## Observed SARS-CoV-2 infections, COVID-19 hospitalizations, and deaths 
 
+During the period considered in this analysis (`r format(first_day, "%B %e, %Y")` to `r format(analysis_last_day, "%B %e, %Y")`),  `r make_pretty(sum(counts_cases$cases))` laboratory-confirmed SARS-CoV-2 infections were observed for individuals 12 years or older. These were mostly distributed across two surges (figure \@ref(fig:cases-hosp-deaths)). The first surge started shortly after several restrictions were lifted on March 15, 2021. Restrictions were imposed again on April 9, 2021, and the cases decreased to a level not seen since the summer of 2020. As a result, restrictions were lifted once again on May 24, 2021, and shortly after the arrival of the Delta variant, a second surge began by the end of June 2021. @ucc
+The SARS-CoV-2 infections observed during the period of December 15, 2020 to `r format(last_day, "%B %d, %Y")` resulted in at least `r make_pretty(sum(counts_cases$hosp))` and `r make_pretty(sum(counts_cases$deaths))` COVID-19 hospitalizations and deaths, respectively (figure \@ref(fig:cases-hosp-deaths); appendix table \@ref(tab:overall)).
 
-### Hospitalization and death relative risk conditioned on infection {-}
+The laboratory-confirmed SARS-CoV-2 infections, COVID-19 hospitalization, and COVID-19 death rates were noticeably lower among the fully vaccinated (appendix table \@ref(tab:overall)). The protection afforded by the vaccine was observed by simply plotting the rates by vaccination group (figure \@ref(fig:cases-hosp-deaths)). The relative risk for the vaccinated seemed to increase after `r format(delta_date, "%B %e, %Y")`, the period in which the Delta variant dominated. However, these rates are not adjusted for age nor is potential waning effectiveness considered. Therefore, to better assess COVID-19 vaccine effectiveness, we applied the approach described in the Method Section. 
 
-Note: in this section, to avoid introducing more mathematical symbols, we repurpose the $Y, N, \alpha, \beta$ and $\gamma$ notation and, because  we fit a model separately to each age group, we do not use the $a$ index. 
+## Time-varying vaccine effectiveness against laboratory-confirmed SARS-CoV-2 infections 
 
-To estimate the further protection provided by the vaccine in reducing hospitalization and deaths among infected individuals we examined the proportion of cases that had hospitalizations or deaths. To do this we defined $N_{i,t}$ as the number of laboratory-confirmed SARS-CoV-2 infections on day $t$ for group $i$. Groups were defined by gender (male or female) and vaccination status (unvaccinated, `r manu_labels[["MOD"]]`, or `r manu_labels[["PFR"]]`). Note that we did not include the `r manu_labels[["JSN"]]` vaccine in this analysis due to small sizes obtained after stratifying by age group. We defined $Y_{i,t}$ as the number of these that had the hospitalization or death outcome. We then assumed that $Y_{i,t}$ followed a binomial distribution with $N_{i,t}$ trials and success probability $p_{i,t}$ defined by:
+We fit a statistical model to estimate time-varying vaccine effectiveness while accounting for the difference in demographics between vaccinated and unvaccinated individuals.  To evaluate whether the Delta variant affected vaccine effectiveness, we considered two periods: before and after `r format(delta_date, "%B %e, %Y")`. For this particular analysis, to ensure we had enough data in each stratum in both time periods (see appendix figure \@ref(fig:waning-population)), we considered a range of 0 to 90 days since fully vaccinated, combined the individuals over 65 into one age group, and excluded `r manu_labels[["JSN"]]` from the analysis. Although the Delta variant led to more SARS-CoV-2 infections (figure \@ref(fig:cases-hosp-deaths)A), a decrease in vaccine effectiveness was not detected, consistent with this variant being more contagious yet the vaccines equally effective against it. Note also that we did not find statistically significant differences among the age groups.
 
+Considering that no clear differences were observed across age groups and time periods, we estimated one time-varying effectiveness across all age groups and for the entire vaccination process period. Because the period of evaluation was different for the different age groups, due to the previously described vaccine rollout phases (appendix table \@ref(tab:tab-1)), we included length of time since vaccination that was possible for the entire population: 
+`r filter(the_max_day, manu=="MOD")$max.day` for `r manu_labels[["MOD"]]`,
+`r filter(the_max_day, manu=="PFR")$max.day` for `r manu_labels[["PFR"]]`, and
+`r filter(the_max_day, manu=="JSN")$max.day` for `r manu_labels[["JSN"]]`. We also excluded 12-17 year old individuals from this analysis since they were only vaccinated with `r manu_labels[["PFR"]]`.
 
-$$
-\log{\frac{p_{i,t}}{1-p_{i,t}}} = \beta_{0} + \beta_1 X_{i,1} + \beta_2 X_{i,2} + \alpha X_{i,3} +  \sum_{w=1}^7 \gamma_{w} 1_{w}(t) +    \mbox{ with } \sum_{w=1}^7 \gamma_{w} = 0
-$$
+The `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` started out with vaccines effectiveness  of 
+`r wa_eff$MOD$max` (95% CI: `r wa_eff$MOD$max.lo`-`r wa_eff$MOD$max.up`), 
+`r wa_eff$PFR$max` (`r wa_eff$PFR$max.lo`-`r wa_eff$PFR$max.up`), 
+and 
+`r wa_eff$JSN$max` (`r wa_eff$JSN$max.lo`-`r wa_eff$JSN$max.up`), 
+respectively. Effectiveness then started waning to  `r wa_eff$MOD$min` (`r wa_eff$MOD$min.lo`-`r wa_eff$MOD$min.up`), `r wa_eff$PFR$min` (`r wa_eff$PFR$min.lo`-`r wa_eff$PFR$min.up`), and ,`r wa_eff$JSN$min` (`r wa_eff$JSN$min.lo`-`r wa_eff$JSN$min.up`) 
+respectively, at the end of the study period (figure \@ref(fig:waning)B;  table \@ref(tab:waning-tab)).
 
+Note: vaccine administration for individuals between 12 and 17 years started on May 12, 2021, and only with the `r manu_labels[["PFR"]]` vaccine.
 
-with $\beta_0$ the baseline log odds for the unvaccinated, $X_{i,1} = 1$ if group $i$ was vaccinated with `r manu_labels[["JSN"]]` and 0 otherwise, $X_{i,2} = 1$  if group $i$ were vaccinated with `r manu_labels[["MOD"]]` and  0 otherwise, $X_{i,3} = 1$ if group $i$ are male and 0 otherwise, and $1_{w}(t)$ indicator functions as in $\eqref{eq:model}$. We fit this model using the Iteratively Reweighted Least Square algorithm. Note that the parameters of interest were $\beta_{1}$ and $\beta_{2}$. 
+## Time-varying vaccine effectiveness against COVID-19 hospitalizations and deaths 
 
-# Results {-}
+We fit the same model to estimate relative risk of COVID-19 hospitalization and deaths. For hospitalizations we saw even higher effectiveness for `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` started out with vaccines effectiveness  of 
+`r wa_eff_hosp$MOD$max` (95% CI: `r wa_eff_hosp$MOD$max.lo`-`r wa_eff_hosp$MOD$max.up`), 
+`r wa_eff_hosp$PFR$max` (`r wa_eff_hosp$PFR$max.lo`-`r wa_eff_hosp$PFR$max.up`), 
+and 
+`r wa_eff_hosp$JSN$max` (`r wa_eff_hosp$JSN$max.lo`-`r wa_eff_hosp$JSN$max.up`), 
+respectively. Effectiveness then started waning to  `r wa_eff_hosp$MOD$min` (`r wa_eff_hosp$MOD$min.lo`-`r wa_eff_hosp$MOD$min.up`), `r wa_eff_hosp$PFR$min` (`r wa_eff_hosp$PFR$min.lo`-`r wa_eff_hosp$PFR$min.up`), and `r wa_eff_hosp$JSN$min` (`r wa_eff_hosp$JSN$min.lo`-`r wa_eff$JSN$min.up`), respectively, after `r one_max_day` days. 
+For deaths we saw even higher effectiveness: `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` started out with vaccines effectiveness  of 
+`r wa_eff_deaths$MOD$max` (95% CI: `r wa_eff_deaths$MOD$max.lo`-`r wa_eff_deaths$MOD$max.up`), 
+`r wa_eff_deaths$PFR$max` (`r wa_eff_deaths$PFR$max.lo`-`r wa_eff_deaths$PFR$max.up`), 
+and 
+`r wa_eff_deaths$JSN$max` (`r wa_eff_deaths$JSN$max.lo`-`r wa_eff_deaths$JSN$max.up`), 
+respectively (figure \@ref(fig:waning)). Effectiveness then commenced waning to  `r wa_eff_deaths$MOD$min` (`r wa_eff_deaths$MOD$min.lo`-`r wa_eff_deaths$MOD$min.up`), 
+`r wa_eff_deaths$PFR$min` (`r wa_eff_deaths$PFR$min.lo`-`r wa_eff_deaths$PFR$min.up`), and 
+`r wa_eff_deaths$JSN$min` (`r wa_eff_deaths$JSN$min.lo`-`r wa_eff$JSN$min.up`), (figure \@ref(fig:waning)C,D; table \@ref(tab:waning-tab)).
 
-## Vaccination data {-}
 
-As of `r format(analysis_last_day, "%B %e, %Y")`, `r make_pretty(sum(vax_tots))` of the `r make_pretty(pr_pop)` individuals living in Puerto Rico had been fully vaccinated: `r make_pretty(vax_tots["PFR"])` with `r manu_labels[["PFR"]]`, `r make_pretty(vax_tots["MOD"])` with `r manu_labels[["MOD"]]`, and `r make_pretty(vax_tots["JSN"])` with `r manu_labels[["JSN"]]`.
-The daily COVID-19 vaccination rates were high during the first four months of the vaccination process, successfully vaccinating (at least one dose) 50% of the population eligible for inoculation at the time (1,442,459 of 2,848,293). @CIFRAS However, as observed in previous vaccination campaigns, vaccine rates decreased after reaching 50%. The plateau was particularly noticeable among the older age groups. After several vaccine mandates were implemented in August and September, the rate commenced increasing (Figure \@ref(fig:vax)). With the exception of pediatric population 12 years and older, whom were only vaccinated with `r manu_labels[["PFR"]]`, the age distribution of the vaccine was similar for all vaccine manufacturers (Supplementary Figure \@ref(fig:vax-age)). 
+## Vaccines lower the risk of COVID-19 hospitalization and death 
 
-## Observed cases, hospitalizations and deaths {-}
+We fit a statistical model to determine if the vaccines provided further protection against COVID-19 hospitalization and death among SARS-CoV-2 infected individuals. Specifically, we estimated the age-group-specific risk of COVID-19 hospitalization and death conditioned on individuals testing positive for SARS-CoV-2 as a function of time since becoming fully vaccinated. Due to low sample sizes we did not run the analysis for `r manu_labels[["JSN"]]`, and for deaths, we combined the `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]`data and only considered age groups above 65 years. We did not find clear evidence of waning for these conditional risks (see appendix figures \@ref(fig:waning-cond-hosp) and \@ref(fig:waning-cond-deaths)). We therefore, fit a version of the model with constant conditional risk for each age group, which provided enough statistical power to obtain an estimate for all age groups and vaccine manufacturers. The probability for COVID-19 hospitalization after SARS-CoV-2 infection for those that were vaccinated was at least twice lower for all age groups except the 85 and older for which the probability was over 1.5 times lower. Similarly, the probability of COVID-19 death after SARS-CoV-2 infection was over three times lower for all age groups, except the 85 and older for whom it was about twice as low (figure \@ref(fig:hosp-cond-cases); appendix table \@ref(tab:hosp-cond-cases-tab)). We did not find statistically significant evidence that the `r manu_labels[["JSN"]]` vaccine provided added protection against COVID-19 hospitalization for people 75 and older, but the sample size was small (appendix table \@ref(tab:hosp-cond-cases-tab)).
 
-During the period considered in this analysis (`r format(first_day, "%B %e, %Y")` to `r format(analysis_last_day, "%B %e, %Y")`),  `r make_pretty(sum(counts_cases$cases))` laboratory-confirmed SARS-CoV-2 infections were observed for individuals 12 years or older. These were mostly distributed across two surges (Figure \@ref(fig:cases-hosp-deaths)). The first of these started shortly after several restrictions were lifted on March 15, 2021. Restrictions were imposed again on April 9, 2021 and the cases decreased to a level not seen since the summer of 2020. As a result, restrictions were lifted once again on May 24, 2021 and shortly after the arrival of the Delta, a second surge began by the end of June 2021. @ucc
-The SARS-CoV-2 infections observed during the period of December 15, 2020 to `r format(last_day, "%B %d, %Y")` resulted in at least `r make_pretty(sum(counts_cases$hosp))` and `r make_pretty(sum(counts_cases$deaths))` COVID-19 related hospitalizations and  deaths, respectively (Figure \@ref(fig:cases-hosp-deaths) and Supplementary Table \@ref(tab:overall)).
+## COVID-19 hospitalizations and deaths avoided 
 
-The infections, hospitalization, and death rates were noticeably lower among the vaccinated (Supplementary Table \@ref(tab:overall)). The protection afforded by the vaccine was observed by simply plotting the infection rates by vaccination group (Figure \@ref(fig:cases-hosp-deaths)). The relative risk for the vaccinated seemed to increase in the period in which the Delta variant dominated (Supplementary Figure \@ref(fig:cases-hosp-deaths)). However, these rates are not age adjusted nor are potential effects of waning effectiveness considered. Therefore, to better assess COVID-19 vaccine effectiveness, we fit statistical models that account for time since the first dose, age, gender, and other potential confounding variables.
+We calculated, for each age group, the expected number of COVID-19 hospitalizations and deaths that would have been observed had the rates in each vaccinated group been equal to the rates of the unvaccinated group. We computed this for each vaccine manufacturer (appendix figure \@ref(fig:exp-obs)). In total, for `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]`, we saw a difference in COVID-19 hospitalizations between what was expected with the unvaccinated rates and what was observed of 
+`r exp_obs %>% filter(manu=="MOD") %>% summarize(n=sum(exp_hosp)-sum(hosp)) %>% pull(n) %>% round %>% make_pretty`,
+`r exp_obs %>% filter(manu=="PFR") %>% summarize(n=sum(exp_hosp)-sum(hosp)) %>% pull(n) %>% round %>% make_pretty`, and
+`r exp_obs %>% filter(manu=="JSN") %>% summarize(n=sum(exp_hosp)-sum(hosp)) %>% pull(n) %>% round %>% make_pretty`, respectively. For deaths it was 
+`r exp_obs %>% filter(manu=="MOD") %>% summarize(n=sum(exp_deaths)-sum(deaths)) %>% pull(n) %>% round %>% make_pretty`,
+`r exp_obs %>% filter(manu=="PFR") %>% summarize(n=sum(exp_deaths)-sum(deaths)) %>% pull(n) %>% round %>% make_pretty`, and
+`r exp_obs %>% filter(manu=="JSN") %>% summarize(n=sum(exp_deaths)-sum(deaths)) %>% pull(n) %>% round %>% make_pretty`. 
+The grand total was at least
+`r exp_obs %>% summarize(n=sum(exp_hosp)-sum(hosp)) %>% pull(n) %>% round %>% make_pretty`,  COVID-19 hospitalizations and 
+`r exp_obs %>% summarize(n=sum(exp_deaths)-sum(deaths)) %>% pull(n) %>% round %>% make_pretty`,  COVID-19 deaths avoided.
 
-## Time-varying vaccine effectiveness against infections {-}
+## No evidence of confounding
 
-We fit a statistical model (described in detail in the Methods Section) to estimate time-varying effectiveness while accounting for the difference in demographics between vaccinated and unvaccinated groups. Note that vaccine administration for individuals between 12 and 17 years started on May 12, 2021 and only with the `r manu_labels[["PFR"]]` vaccine. 
+We examined vaccine effectiveness during the days right after the first dose. If the vaccinated and unvaxinated groups are comparable, apart from the vaccine effect, we expect to see no difference in infection rates (effectiveness = 0), since during the first days, the vaccine has not yet taken effect. The data are consistent with the two groups being comparable in terms of risk behaviors (appendix figure  \@ref(fig:confounder-check)). Note that we observed effectiveness estimates near 1, instead of 0, right after the first was administered. Note that this is expected because SARS-CoV-2 infected individuals were discouraged from getting vaccine until they recovered. This implies that on the day of the first dose we should see effectiveness close to 1. As the days go by, effectiveness drop to around 0 as expected, before it starts increasing consistent with the individuals starting to acquire immunity. 
 
-To evaluate whether the Delta variant affected vaccine effectiveness, we considered two periods: before and after `r format(delta_date, "%B %e, %Y")`. The `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]` vaccines remained steady at over 75% effective after the Delta variant gained dominance and a decrease in vaccine effectiveness was not detected due to the Delta variant (Supplementary Figure 
-\@ref(fig:waning-before-after)).
+# Discussion 
 
-Furthermore, to evaluate if there were differences in effectiveness across age groups
-for the  `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]` vaccines we ran a similar analysis, but comparing age groups. We did not observe substantial differences in effectiveness against infections by age, except for those 85 and older for whom the waning appears worse  (Supplementary Figure \@ref(fig:waning-by-age)). Note that this group was smaller and resulted in less precise estimates.
+Our analyses demonstrate that all vaccines were effective at reducing risks of SARS-CoV-2 infection, COVID-19 hospitalization and deaths across all age groups. This was evident in mid July when 
+a preliminary analysis of these data @prelim led the government to impose a series of vaccine mandates between July 22 and August 19, 2021. Daily vaccination rates increased after this and by September 27, 2021, Puerto Rico passed Massachusetts, Vermont, Maine, and Connecticut to become the US jurisdiction with the highest vaccination rate. The results of this analysis are currently being used to develop recommendations regarding boosters shots. For example, we found that the protection provided by the `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]` vaccines were stronger and longer lasting than `r manu_labels[["JSN"]]`  and, as a result, the Puerto Rico Department of Health is recommending `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]` boosters for individuals that received their  `r manu_labels[["JSN"]]` over two months ago. We also found that the effectiveness of all vaccines decreased over time, implying that to reach herd immunity, boosters shots will be needed. These results also 
+raise the question of weather new vaccines mandates should require booster shots after a certain time period of receiving the final dose. 
 
-Considering that no clear differences were observed across age groups and time-periods, we estimated one time-varying effectiveness across all age-groups and for the entire vaccination process period. Note that the period of evaluation was different for the different age groups given the previously described phases (Table \@ref(tab:tab-1)). Furthermore, for the `r manu_labels[["JSN"]]` vaccine, the period after the first dose administration date was shorter because this vaccine received its EUA on March 3, 2021. 
+It is important to note that this an observational study and not a randomized clinical trial. Although we controlled for confounding factors that were coded and available for analyses, it is possible that there were unknown and unobserved confounders that were not accounted for, such as chronic health conditions and immunocompromising conditions. However, the findings described here agree with general trends observed in the clinical trials and our analysis exploring for effects due to confounding did not reveal concerning results. [@CTPFR] [@CTMOD] [@CTJanssen]
 
-The  `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, and `r manu_labels[["JSN"]]` vaccines had peak  effectiveness  of `r wa_peak_mod` (`r wa_peak_mod_lo` - `r wa_peak_mod_up`), `r wa_peak_pfr` (`r wa_peak_pfr_lo` - `r wa_peak_pfr_up`), and `r wa_peak_jsn` (`r wa_peak_jsn_lo` - `r wa_peak_jsn_up`), respectively (Figure \@ref(fig:waning)). Effectiveness then commenced waning to `r wa_est_mod` (`r wa_est_mod_lo` - `r wa_est_mod_up`), `r wa_est_pfr` (`r wa_est_pfr_lo` - `r wa_est_pfr_up`), and `r wa_est_jsn` (`r wa_est_jsn_lo` - `r wa_est_jsn_up`), respectively, at the end of the study period (Supplementary Table \@ref(tab:waning-tab)). 
+It is also important to note that the statistical analysis presented here is completely reproducible. Furthermore, the Puerto Rico Department of Health has developed a reproducible pipeline that can update the dataset needed to perform the analysis. We can therefore update the results regularly to continue providing guidance on public health decisions in Puerto Rico, and beyond.
 
-We fit the same model to estimate relative risk of hospitalization comparing vaccinated and unvaccinated individuals across time since fully vaccinated. Although we did not have enough data to obtain as precise estimates as for infections, similar patterns were observed (Supplementary Figure \@ref(fig:waning-hosp)).
+# Contributors
 
-## Vaccines lower the risk of hospitalization and death {-}
+RAI conceived this study. ICG was the project administrator of the vaccination process in Puerto Rico. EGN coordinated and managed the Department of Health databases. EGN and MMRF curated the data under RAI's supervision. MMRF and RAI performed the statistical analysis and wrote the first draft of the manuscript. All authors gave feedback on the  manuscript for important intellectual content. All authors gave final approval of the version to be published. All authors had final responsibility for the decision to submit for publication.
 
-```{r}
-tmp1 <- final_models$hosp$rr %>% filter(ageRange!="18-44") %>%
-  select(ageRange, group, estimate, conf.low, conf.high) %>%
-  mutate(estimate = paste0(dynamic_round(estimate,10), " (", dynamic_round(conf.low,1), ", ", dynamic_round(conf.high,10), ")")) %>%
-  select(ageRange, group, estimate) %>%
-  mutate(ageRange = paste("Risk reduction for", ageRange)) %>%
-  pivot_wider(names_from = ageRange, values_from = estimate) %>%
-  mutate(Outcome = "Hospitalization") %>%
-  arrange(group)
+# Declaration of interests
 
-tmp2 <- final_models$deaths$rr  %>% filter(ageRange!="18-44") %>%
-  select(ageRange,  group, estimate, conf.low, conf.high) %>%
-  mutate(estimate = paste0(dynamic_round(estimate,10), " (", dynamic_round(conf.low,1), ", ", dynamic_round(conf.high,10), ")")) %>%
-  select(ageRange, group, estimate) %>%
-  mutate(ageRange = paste("Risk reduction for", ageRange)) %>%
-  pivot_wider(names_from = ageRange, values_from = estimate) %>%
-  mutate(Outcome = "Deaths") %>%
-  arrange(group)
+The authors declare no conflict of interests.
 
-tmp1 <- bind_rows(tmp1, tmp2) %>% relocate(Outcome) 
+# Data sharing
 
-rr_hosp45_mod <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="MOD",]$`Risk reduction for 45-74`
-rr_hosp45_pfr <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="PFR",]$`Risk reduction for 45-74`
-rr_hosp45_jsn <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="JSN",]$`Risk reduction for 45-74`
+The data and code needed to reproduce this analysis is here: https://github.com/rafalab/vax-eff-pr. The data wrangling code for curation is also available. The raw data sits on Department of Health HIPAA compliant databases and is not publicly available as it includes personal identifiers. 
 
-rr_hosp75_mod <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="MOD",]$`Risk reduction for 75-84`
-rr_hosp75_pfr <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="PFR",]$`Risk reduction for 75-84`
-rr_hosp75_jsn <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="JSN",]$`Risk reduction for 75-84`
+# Acknowledgements  
 
-rr_hosp85_mod <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="MOD",]$`Risk reduction for 85+`
-rr_hosp85_pfr <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="PFR",]$`Risk reduction for 85+`
-rr_hosp85_jsn <- tmp1[tmp1$Outcome=="Hospitalization" & tmp1$group=="JSN",]$`Risk reduction for 85+`
+We thank the Puerto Rico Department of Health and Digheontech, Inc. for allowing us to collaborate in this effort. In particular, we thank doctors Carlos Mellado, Melissa Marzán, and Daniel Colón-Ramos for their continued support and suggestions in the completion of this project. Furthermore, we thank Wilmarí de Jesús Álvarez and Dr. Fabiola Cruz López for providing insight into aspects concerning demography and molecular epidemiology, respectively. 
 
-rr_death45_mod <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="MOD",]$`Risk reduction for 45-74`
-rr_death45_pfr <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="PFR",]$`Risk reduction for 45-74`
-rr_death45_jsn <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="JSN",]$`Risk reduction for 45-74`
-
-rr_death75_mod <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="MOD",]$`Risk reduction for 75-84`
-rr_death75_pfr <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="PFR",]$`Risk reduction for 75-84`
-rr_death75_jsn <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="JSN",]$`Risk reduction for 75-84`
-
-rr_death85_mod <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="MOD",]$`Risk reduction for 85+`
-rr_death85_pfr <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="PFR",]$`Risk reduction for 85+`
-rr_death85_jsn <- tmp1[tmp1$Outcome=="Deaths" & tmp1$group=="JSN",]$`Risk reduction for 85+`
-
-```
-
-We fit a statistical model (described in detail in the Methods Section) to determine if the vaccines provided further protection against hospitalization and death among infected individuals.  Specifically, we estimated the probability of hospitalization and death conditioned on individuals testing positive for SARS-CoV-2 for several age groups (Figure \@ref(fig:hosp-cond-cases) and Supplementary Table \@ref(tab:hosp-cond-cases-tab)). Due to the small sample sizes available for the `r manu_labels[["JSN"]]` vaccine, after stratification by age,  we did not include it in this analysis. The probability for hospitalization after infection for those that were  vaccinated was at least twice lower for all age groups except the 85 and older for which the probability was over 50% lower. Similarly, the probability of death after infection was over three times lower for all age groups, except the 85 and older for which it was about twice as low. 
-
-We also fit a statistical model to estimate the relative risk of COVID-19 hospitalization and death comparing vaccinated and non-vaccinated individuals (not conditioned on being infected). Due to sparsity in the data we grouped age groups as described in the Methods Section. Individuals vaccinated with `r manu_labels[["MOD"]]` or `r manu_labels[["PFR"]]` between 45 and 74 years were found to be `r rr_hosp45_mod` and `r rr_hosp45_pfr` times less likely to be hospitalized due to COVID-19 in comparison to unvaccinated individuals, respectively. Similarly, `r manu_labels[["JSN"]]` vaccinated individuals between 45 and 74 years had `r rr_hosp45_jsn` times less risk for hospitalizations in comparison to the unvaccinated. For those 75 and older vaccinated with `r manu_labels[["MOD"]]` or `r manu_labels[["PFR"]]`, their risk for hospitalization by COVID-19 is reduced by `r rr_hosp85_mod` and `r rr_hosp85_pfr` times, respectively, in comparison to unvaccinated individuals. We did not find statistically significant evidence that the `r manu_labels[["JSN"]]` vaccine provided added protection against hospitalization for people 85 and older (Table \@ref(tab:rr-tab)).
-
-All three vaccines provided high protection against death by COVID-19 for those between 45 and 84 years. For people 85 years vaccinated with `r manu_labels[["MOD"]]` or `r manu_labels[["PFR"]]`, the risk reduction was `r rr_death85_mod` and `r rr_death85_pfr`, respectively, showing these vaccine provide great protection against death for this age group. The `r manu_labels[["JSN"]]` vaccine did not provide added protection against death by COVID-19 for people 85 and older (Table \@ref(tab:rr-tab)).
-
-# Discussion {-}
-
-Our analyses clearly demonstrates that all vaccines were effective at reducing risks of infection, hospitalization and death across all age groups, with the protection provided by the and `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]` vaccine particularly strong. At the peak of their effectiveness `r manu_labels[["MOD"]]` and `r manu_labels[["PFR"]]` were `r wa_peak_mod` (`r wa_peak_mod_lo` - `r wa_peak_mod_up`) and `r wa_peak_pfr` (`r wa_peak_pfr_lo` - `r wa_peak_pfr_up`) effective, respectively. Meanwhile `r manu_labels[["JSN"]]` was  `r wa_peak_jsn` (`r wa_peak_jsn_lo` - `r wa_peak_jsn_up`) at its peak. The effectiveness of all vaccines decreased over tine, although `r manu_labels[["MOD"]]`'s effectiveness remained high at  `r wa_est_mod` even after four months. `r manu_labels[["PFR"]]` was also relatively high, at around `r wa_est_pfr`, however, `r manu_labels[["JSN"]]` effectiveness dropped to `r wa_est_jsn`. All vaccines had a lower effectiveness for those over 85 years, with the decrease in effectiveness particularly low for the `r manu_labels[["JSN"]]` vaccine. No evidence was found that effectiveness was different after the Delta variant became dominant. 
-
-It is important to note that this study is observational based on real world data and not a randomized clinical trial. Although we controlled for confounding factors that were coded and available for analyses, it is possible that there were unknown and unobserved confounders that were not accounted for, such as chronic health conditions and immunocompromising conditions. However, the findings described here agree with general trends observed in the clinical trials. [@CTPFR] [@CTMOD] [@CTJanssen]. 
-
-Following CDC guidelines, in Puerto Rico it is general practice to recommend diagnostic testing to those who are experiencing symptoms and/or are direct contacts of a case. @cdcTests This implies there is a risk for selection bias given the fact that vaccinated people are less likely to experience severe illness or symptoms, and thus less likely to get a diagnostic test. [@cdcBreak]  
-
-It is also important to note that to perform this analysis two Puerto Rico Department of Health databases were integrate: the BioPortal, which stores test results, hospitalizations, and deaths, and PREIS, which stores vaccination data. These two databases lacked a common unique identifier and records were matched using pacient information. This implies that some parings may have been missed, although a human spot check found the paring to be 99% accurate. We also note that due to deficiencies in reporting within the Department of Health, not all hospitalizations and deaths were included in the BioPortal database and there is lag in reporting in some vaccination centers    . However, no clear reason that could bias results to lower or higher vaccination effectiveness estimates was detected. Finally, it is also important to note that all our analyses depend on age specific population estimates provided by the United States Census Bureau and these are likely to change with the finalization of the 2020 census.
-
-
-# Acknowledgements  {-}
-
-We thank the Puerto Rico Department of Health and Digheontech, Inc. for allowing us to collaborate in this effort. In particular, we thank doctors Melissa Marzán, and Daniel Colón-Ramos for their continued support and suggestions in the completion of this project. Furthermore, we thank Wilmarí de Jesús Álvarez and Dr. Fabiola Cruz López for providing insight into aspects concerning demography and molecular epidemiology, respectively. 
-
-
-## Appendix {-}
-
-The author's full names and academic degrees are as follows: Mónica M. Robles Fontán, M.S., Elvis G. Nieves, HSDG, Iris Cardona Gerena M.D, and Rafael A. Irizarry Ph.D.
-
-The author's affiliation are as follows: Digheontech, Inc. (M.M.R.F.), Puerto Rico Department of Health (E.G.N and I.C.G), Department of Data Science, Dana-Farber Cancer Institute (R.A.I), Department of Biostatistics, Harvard T.H. Chan School of Public Health (R.A.I.)
-
-
-# References {-}
+# References 
 
 <div id="refs"></div>
 
 \pagebreak
 
-# Figures {-}
+# Figures 
 
 
 ```{r vax, fig.cap="Total number of fully vaccinated individuals per day by vaccine manufacturer (represented with different colors).", fig.width = 6, fig.height = 4, out.width="60%"}
@@ -525,9 +247,9 @@ counts_vax_age_gender_manu %>%
   group_by(date, manu) %>%
   summarize(vax=sum(vax), .groups = "drop") %>%
   ggplot(aes(date,vax, color = manu))+
-  geom_line() +
+  geom_line(lwd = 1.5) +
   scale_color_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
-                    values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine")+
+                     values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine")+
   scale_y_continuous(labels=scales::comma)+
   scale_x_date(breaks="1 month", date_labels = "%b")+
   labs(y="Fully vaccinated individuals", x="Date", fill = "")+
@@ -535,8 +257,11 @@ counts_vax_age_gender_manu %>%
 ```
 
 
-```{r cases-hosp-deaths, fig.cap="Above: Cases, hospitalizations and deaths per day for individuals 12 years or older during hte period of study. Below: Weekly rates (per day per 100,000) for detected cases, hospitalizations, and deaths by vaccination status. Note that not all hospitalizations are reported to the BioPortal database. The rates are based on total numbers and are not adjusted for age. Colors are used to denote the different vaccination status.", fig.width = 8, fig.height = 6}
-deaths <- dat %>% 
+\pagebreak
+
+```{r cases-hosp-deaths, fig.cap="Above: SARS-CoV-2 infections (Cases), COVID-19 hospitalizations and deaths per day for individuals 12 years or older during the period of study. Below: Weekly rates (per day per 100,000) for SARS-CoV-2 infections (Cases), COVID-19 hospitalizations and deaths by vaccination status. The rates are based on total numbers and are not adjusted for age. Colors are used to denote the different vaccination status.", fig.width = 8, fig.height = 6}
+deaths <- dat_cases %>%
+  filter(status != "PAR") %>%
   filter(!is.na(ageRange)) %>%
   filter(death) %>%
   mutate(date_death = 
@@ -544,16 +269,19 @@ deaths <- dat %>%
   group_by(date_death) %>%
   summarize(deaths = n()) %>%
   rename(date = date_death) 
-hosp <- dat %>% 
-   mutate(date_hosp = 
+
+hosp <- dat_cases %>%
+  filter(status != "PAR") %>%
+  mutate(date_hosp = 
            if_else(date_hosp<first_day | date_hosp>last_day, date, date_death)) %>%
- filter(!is.na(date_hosp)) %>%
+  filter(!is.na(date_hosp)) %>%
   group_by(date_hosp) %>%
   summarize(hosp = n()) %>%
   rename(date = date_hosp)%>%
   filter(date>=first_day)
 
-cases <- dat %>% 
+cases <- dat_cases %>%
+  filter(status != "PAR") %>%
   filter(date >= first_day &  date<= analysis_last_day) %>%
   group_by(date) %>%
   summarize(cases = n()) 
@@ -568,7 +296,7 @@ p1 <- cases %>%
   ggplot(aes(Date, value)) +
   geom_bar(stat = "identity") +
   facet_wrap(~name, ncol = 3, scale = "free_y") +
-  labs(y="")+
+  labs(y="Daily counts")+
   scale_x_date(breaks="2 month", date_labels = "%b")+
   theme_bw() #+
 
@@ -577,15 +305,15 @@ p2 <- counts_cases %>%
   mutate(week = floor_date(date, unit = "week", week_start = wday(last_day))) %>% 
   group_by(manu, week) %>%
   summarize( 
-            Cases = sum(cases) / sum(poblacion) * 10^5,
-            Hospitalization = sum(hosp) / sum(poblacion) * 10^5,
-            Deaths = sum(deaths) /sum(poblacion) * 10^5,
-            .groups = "drop") %>% 
+    Cases = sum(cases) / sum(poblacion) * 10^5,
+    Hospitalization = sum(hosp) / sum(poblacion) * 10^5,
+    Deaths = sum(deaths) /sum(poblacion) * 10^5,
+    .groups = "drop") %>% 
   pivot_longer(c(Cases, Hospitalization, Deaths)) %>%
   mutate(name = factor(name, levels = c("Cases", "Hospitalization", "Deaths"))) %>%
   ggplot(aes(week, value, color = manu)) +
   geom_line() + 
-  labs(y="Rates (per day per 100,000)", x="Week")+
+  labs(y="Rates (per day per 100,000)", x="Date")+
   scale_x_date(breaks="2 month", date_labels = "%b")+
   scale_color_manual(
     labels = c(manu_labels[["UNV"]], manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
@@ -599,105 +327,152 @@ gridExtra::grid.arrange(p1, p2, ncol = 1)
 ```
 
 
+\pagebreak
 
-```{r waning, fig.cap="Vaccine effectiveness through time. The estimated effectiveness is plotted against days since the individuals were fully vaccinated. The ribbons represent point-wise 99\\% confidence intervals. The different vaccine manufacturers are denoted in different colors.", fig.width=6, fig.height=4, out.width="70%"}
-waning_fit %>% 
-  ggplot(aes(day, fit, color=manu)) +
-  geom_ribbon(aes(ymin=conf.low, ymax = conf.high, fill = manu), 
-              alpha = 0.5, color = NA, show.legend = FALSE) +
-  geom_line() + 
-  scale_y_continuous(labels = percent)  +
-  geom_hline(yintercept = 0, lty = 2) +
-  coord_cartesian(ylim=c(0,1)) + 
-  theme_bw() +
-  scale_color_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
-                    values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine")+
-  scale_fill_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
-                    values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine") + 
-  labs(x = "Days since fully vaccinated", y = "Effectiveness")+theme_bw()+theme(legend.position = "bottom")
+```{r , fig.width=8, fig.height=4, out.width="100%"}
+waning_dat  %>% 
+  mutate(ageRange = fct_collapse(ageRange, "65+"=c("65-74", "75-84", "85+")))%>%
+  filter(!(ageRange == "12-17" & manu == "MOD") & manu != "JSN" & day <= 90) %>%
+  mutate(max.day = 90) %>%
+  group_by(delta, ageRange, manu) %>%
+  do(fit_waning_model(., knots = c(45), alpha = 0.05)) %>%
+  ggplot(aes(day, fit, color=delta)) + 
+  geom_line(size = 0.75) + 
+  geom_ribbon(aes(ymin=conf.low, ymax = conf.high, fill = delta), 
+              alpha = 0.5, color = NA,  show.legend = FALSE) +
+  facet_grid(manu~ageRange, labeller = labeller(manu = as_labeller(c(`MOD` = manu_labels[["MOD"]], `PFR` = manu_labels[["PFR"]])))) +  
+  coord_cartesian(ylim=c(0,1)) +
+  scale_y_continuous(labels = scales::percent) + 
+  labs(x="Days since fully vaccinated", y="Vaccine effectiveness")+
+  scale_color_manual(labels = c(manu_labels[["before"]], manu_labels[["after"]]), 
+                     values = c(manu_colors[["before"]], manu_colors[["after"]]),  name = "")+
+  scale_fill_manual(labels = c(manu_labels[["before"]], manu_labels[["after"]]), 
+                    values = c(manu_colors[["before"]], manu_colors[["after"]]),  name = "") +
+  theme_bw() + theme(legend.position = "bottom") +
+  ggtitle("A")
 ```
 
-
-```{r hosp-cond-cases, fig.width=8, fig.height=3, fig.cap="Estimated probability of hospitalizations and deaths from COVID-19 among individuals infected with SARS-CoV-2 with 95\\% confidence intervals. Two vaccinated groups are compared to unvaccinated with the different vaccination manufacturers denoted with color.  Note that not all hospitalizations are reported to the BioPortal database."}
-p1 <- hosp_by_cases %>%
-    ggplot(aes(ageRange, rate, ymin = conf.low, ymax = conf.high, color = group)) +
-    labs(color = "") +
-    geom_errorbar(position = position_dodge(.3), width = 0.25) + 
-    geom_point(position = position_dodge(.3), size=1) +
-    xlab("Age group") +
+```{r waning, fig.cap="Estimated effectiveness plotted against days since the individuals were fully vaccinated. The ribbons represent point-wise 99\\% confidence intervals. A) Comparison before and after the Delta variant became dominant by age group and and vaccine manufacturer (mRNA-1273 and BNT162b2).  B) Vaccine effectiveness against infections by manufacturer for the entire study period and age groups combined. C) As B) but for hospitalizations D) As B) but for deatsh. ", fig.width=8, fig.height=3, out.width="100%"}
+bind_rows(mutate(waning_fit, event="B"),
+          mutate(waning_hosp_fit, event = "C"),
+          mutate(waning_deaths_fit, event = "D")) %>%
+    ggplot(aes(day, fit, color=manu)) + 
+    geom_ribbon(aes(ymin=conf.low, ymax = conf.high, fill = manu), 
+                alpha = 0.5, color = NA, show.legend = FALSE) +
+    geom_line() + 
+    scale_y_continuous(labels = percent)  +
+    geom_hline(yintercept = 0, lty = 2) +
+    coord_cartesian(ylim=c(0,1)) + 
     theme_bw() +
-    theme(axis.text.x = element_text(angle = 90), legend.position = "bottom") +
-    scale_y_continuous(labels = scales::percent) +
+    scale_color_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
+                       values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine")+
+    scale_fill_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
+                      values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine") + 
+    labs(x = "Days since fully vaccinated", y = "Vaccine effectiveness")+
+    theme_bw()+
+    theme(legend.position = "bottom") +
+    facet_wrap(~event) + 
+  theme(strip.background = element_blank(), 
+        strip.text = element_text(hjust = 0, size = 12))
+```
+
+\pagebreak
+
+```{r, fig.width=8, fig.height=3.5}
+p1 <- hosp_by_cases %>%
+  filter(!(ageRange %in% c("75-84", "85+") & group == "JSN")) %>%
+  ggplot(aes(ageRange, rate, ymin = conf.low, ymax = conf.high, color = group)) +
+  labs(color = "") +
+  geom_errorbar(position = position_dodge(.3), width = 0.25) + 
+  geom_point(position = position_dodge(.3), size=1) +
+  xlab("Age group") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0), legend.position = "none") +
+  scale_y_continuous(labels = scales::percent) +
   scale_color_manual(labels = c(manu_labels[["UNV"]], manu_labels[["MOD"]],
-                                manu_labels[["PFR"]]),
-                    values = c(manu_colors[["UNV"]],manu_colors[["MOD"]],
-                               manu_colors[["PFR"]])) +
-  ggtitle("Probability of hospitalization among infected") +
-  ylab("") + theme(title=element_text(size=10))
+                                manu_labels[["PFR"]], manu_labels[["JSN"]]),
+                     values = c(manu_colors[["UNV"]], manu_colors[["MOD"]],
+                                manu_colors[["PFR"]], manu_colors[["JSN"]])) +
+  ylab("Probability of hospitalization among infected") +
+  ggtitle("A") + theme(title=element_text(size=10)) +
+  coord_cartesian(ylim=c(0,.325))
+p1
+
+```
+
+```{r hosp-cond-cases, fig.width=8, fig.height=3.5, fig.cap="Estimated probability of adverse outcomes from COVID-19 among individuals infected with SARS-CoV-2 with 95\\% confidence intervals. Two vaccinated groups are compared to unvaccinated with the different vaccination manufacturers denoted with color. For Ad26.COV2.S, the estimates and confidence intervals for the 75-84 and 85+ are not shown due to small sizes. A) Hospitalizations. B) Deaths "}
+
 
 p2 <- deaths_by_cases %>%
-   ggplot(aes(ageRange, rate, ymin = conf.low, ymax = conf.high, color = group)) +
-    labs(color = "") +
-    geom_errorbar(position = position_dodge(.3), width = 0.25) + 
-    geom_point(position = position_dodge(.3), size = 1) +
-    xlab("Age group") +
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90), legend.position = "bottom") +
-    scale_y_continuous(labels = scales::percent) + 
+  filter(!(ageRange %in% c("75-84", "85+") & group == "JSN")) %>%
+  ggplot(aes(ageRange, rate, ymin = conf.low, ymax = conf.high, color = group)) +
+  labs(color = "") +
+  geom_errorbar(position = position_dodge(.3), width = 0.25, show.legend = T) + 
+  geom_point(position = position_dodge(.3), size = 1, show.legend = T) +
+  xlab("Age group") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 0), legend.position = "bottom") +
+  scale_y_continuous(labels = scales::percent) + 
   scale_color_manual(labels = c(manu_labels[["UNV"]], manu_labels[["MOD"]],
-                                manu_labels[["PFR"]]),
-                    values = c(manu_colors[["UNV"]],manu_colors[["MOD"]],
-                               manu_colors[["PFR"]])) +
-  ggtitle("Probability of death among infected") +
-  ylab("")+ theme(title=element_text(size=10))
+                                manu_labels[["PFR"]], manu_labels[["JSN"]]),
+                     values = c(manu_colors[["UNV"]], manu_colors[["MOD"]],
+                                manu_colors[["PFR"]], manu_colors[["JSN"]])) +
+  ylab("Probability of death among infected") +
+  ggtitle("B")+ theme(title=element_text(size=10))+
+  coord_cartesian(ylim=c(0,.325))
 
-gridExtra::grid.arrange(p1, p2, nrow=1)
+
+
+p2
+```
+
+\pagebreak
+
+# Tables 
+
+```{r waning-tab} 
+d <- bind_rows(
+  mutate(waning_tab, Outcome = "Infection"),
+  mutate(waning_hosp_tab, Outcome = "Hospitalization"),
+  mutate(waning_deaths_tab, Outcome = "Death")) %>%
+  relocate(Outcome) %>%
+  mutate("Vaccine" = recode(manu, PFR = manu_labels[["PFR"]], 
+                            MOD = manu_labels[["MOD"]], 
+                            JSN = manu_labels[["JSN"]]),
+         "Effectiveness on first day as fully vaccinated (CI)" = paste0(make_pct(max), 
+                                            " (", make_pct(max.lo), " - ",
+                                            make_pct(max.up), ")"),
+         "Effectiveness at end of period (CI)" = paste0(make_pct(min), 
+                                                        " (", make_pct(min.lo), " - ",
+                                                        make_pct(min.up), ")")
+  ) %>%
+  dplyr::select(`Outcome`, `Vaccine`, `Effectiveness on first day as fully vaccinated (CI)`, 
+                `Effectiveness at end of period (CI)`) %>%
+  arrange(factor(Vaccine, levels=plot_manu_levels))
+
+names(d)[4] <- paste("Effectiveness after", one_max_day, "days (CI),")
+
+flextable(d) %>%
+  set_caption("Waning effectiveness against infection with 99\\% point-wise confidence intervals.") %>%
+  align(j=1:2, align = "left", part = "all") %>%
+  align(j=3:4, align = "center", part = "all")  %>%
+  width(j=1:2, 1.5) %>%
+  width(j=c(3,4), 2) %>% fit_to_width(max_width = 7)
 ```
 
 
 
 \pagebreak
 
-# Tables {-}
+# Appendix
 
-
-```{r rr-tab}
-
-tmp3 <- final_models$hosp$excess %>% rename(group= manu) %>%
-  mutate(Outcome = "Hospitalization")  %>%
-  arrange(group)
-
-tmp4 <- final_models$deaths$excess %>%rename(group= manu) %>%
-  mutate(Outcome = "Deaths")  %>%
-  arrange(group) 
-
-
-tmp2 <- bind_rows(tmp3, tmp4) %>%
-  mutate_if(is.numeric, round) %>%
-mutate_if(is.numeric, make_pretty)
-left_join(tmp1, tmp2, by = c("group", "Outcome")) %>%
-   mutate(group = recode(group, MOD = manu_labels[["MOD"]], PFR = manu_labels[["PFR"]], 
-                         JSN = manu_labels[["JSN"]]))  %>%
-  rename(Vaccine = group) %>%
-    kableExtra::kbl(align = c("l", "l", "c", "c", "c", "c", "c", "c", "c"),
-                  booktabs = TRUE,
-                  col.names = c("Outcome", "Vaccine", colnames(tmp1)[-c(1:2)], "Expected if unvaccinated", "Observed", "Avoided"),
-                  linesep = "", longtable = TRUE, caption = "Reduction in risk provided by the different vaccines for individuals across age groups. We estimated the relative risk of hospitalization and death for these two age groups and each vaccine manufacturer, with a model that adjusted for population size, age, gender, and time varying incidence rates.  Columns 3, 4, and 5 show estimated reduction in risk and 95\\% confidence intervals, comparing unvaccinated to vaccinated rates. Columns 6, 7, and 8 show estimated expected outcomes based on estimated unvaccinated rates and the difference between these.") %>% 
-  kableExtra::kable_styling(latex_options = c("striped","HOLD_position")) %>%
-  kableExtra::column_spec(3:5, "0.75in") %>%
-  kableExtra::column_spec(6:7, "0.65in") 
-```
-
-\pagebreak
-# Supplementary Material {-}
 
 \renewcommand{\thefigure}{S\arabic{figure}}
 \setcounter{figure}{0}
 \renewcommand{\thetable}{S\arabic{table}}
 \setcounter{table}{0}
 
-## Supplementary Figures {-}
-
+## Supplementary Figures 
 
 ```{r vax-age, fig.cap="Total number of fully vaccinated individuals by age group and vaccine manufacturer. Each pane represents a vaccine manufacturer and colors represent the different age groups.", fig.width = 8, fig.height = 3}
 vaccine_labeller <- c("JSN" = manu_labels[["JSN"]], 
@@ -719,97 +494,223 @@ counts_vax_age_gender_manu %>%
   theme(legend.position = "bottom")
 ```
 
-```{r waning-before-after, fig.width=8, fig.height=4, fig.cap = "Time varying effectiveness estimates by age group and vaccine manufacturer before and after arrival of the Delta variante. The ribbons represent point-wise 99\\% confidence intervals."}
-##SUPP FIG 1
-waning_dat  %>% 
-  filter(get_age(ageRange) < 65) %>%
-  filter(ageRange != "12-17" & manu != "JSN" & day <= 60) %>%
-  mutate(max.day = 60) %>%
-  group_by(delta, ageRange, manu) %>%
-  do(fit_waning_model(., knots = c(30), alpha = 0.05)) %>%
-  ggplot(aes(day, fit, color=delta)) + 
-  geom_line(size = 0.75) + 
-  geom_ribbon(aes(ymin=conf.low, ymax = conf.high, fill = delta), 
-              alpha = 0.5, color = NA,  show.legend = FALSE) +
-  facet_grid(manu~ageRange, labeller = labeller(manu = as_labeller(c(`MOD` = manu_labels[["MOD"]], `PFR` = manu_labels[["PFR"]])))) +  
-  coord_cartesian(ylim=c(0,1)) +
-  scale_y_continuous(labels = scales::percent) + 
-  labs(x="Days since fully vaccinated", y="Effectiveness")+
-  scale_color_manual(labels = c(manu_labels[["before"]], manu_labels[["after"]]), 
-                    values = c(manu_colors[["before"]], manu_colors[["after"]]),  name = "")+
-  scale_fill_manual(labels = c(manu_labels[["before"]], manu_labels[["after"]]), 
-                    values = c(manu_colors[["before"]], manu_colors[["after"]]),  name = "") +
-  theme_bw()+theme(legend.position = "bottom") 
-```
+\pagebreak
 
-```{r waning-by-age, fig.cap="Waning effectiveness against infection by age group and vaccine manufacturer (colors). The ribbons represent point-wise 99\\% confidence intervals.", fig.width=8, fig.height=8}
-##SUPP FIG 2
-waning_dat %>% 
-  filter(manu != "JSN") %>%
-  filter(!(ageRange == "12-17" & manu!="PFR")) %>%
-  mutate(age = get_age(ageRange)) %>%
-  left_join(max_days, by = c("manu", "ageRange")) %>%
-  group_by(ageRange, manu) %>%
-  do(fit_waning_model(., knots = c(30, 60))) %>%
-  ggplot(aes(day, fit, ymin=conf.low, ymax = conf.high, 
-             fill = manu, color = manu)) + 
-  geom_line() + 
-  geom_ribbon(aes(), alpha = 0.5, color = NA,  show.legend = FALSE) +
-  facet_wrap(~ageRange, ncol = 3) + 
-  scale_y_continuous(labels = scales::percent) +
-  coord_cartesian(ylim=c(0,1)) +
+```{r waning-population, fig.cap="Number of individuals for each possible value of days since fully vaccinated. We show values for before and after the Delta variant became dominant (solid versus dashed) and vaccine manufacturer (colors).", fig.width = 8, fig.height = 8, out.width = "100%"}
+waning %>% group_by(delta, manu, ageRange, day) %>% 
+  summarize(poblacion = sum(poblacion), .groups = "drop") %>% 
+  filter(!(ageRange == "12-17" & manu != "PFR")) %>%
+  mutate(delta = recode(delta, before = manu_labels[["before"]], after = manu_labels[["after"]])) %>%
+  ggplot(aes(day, poblacion, color = manu, linetype = delta)) +
+  geom_line() +
+  ylab("Number of indivuals")+
+  xlab("Days since fully vaccinated") +
+  scale_y_continuous(labels = comma)+
+  facet_wrap(~ageRange) +
+  theme_bw() +
+  scale_linetype(name = "") +
   scale_color_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
-                    values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine")+
-  scale_fill_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
-                    values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine")+
-  labs(x = "Days since fully vaccinated", y ="Effectiveness")+theme_bw()+
+                     values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine")+ 
   theme(legend.position = "bottom")
 ```
 
+\pagebreak
 
-```{r waning-hosp, fig.cap="Vaccine reduction in risk of hospitalization through time. The estimated effectiveness is plotted against days since the first dose was administered. The different vaccine manufacturers are denoted in different colors. The ribbons represent point-wise 99\\% confidence intervals.", fig.width=6, fig.height=4, out.width="70%"}
-waning_hosp_fit %>% 
-  ggplot(aes(day, fit, color=manu)) +
-  geom_ribbon(aes(ymin=conf.low, ymax = conf.high, fill = manu), alpha = 0.5, color = NA,  show.legend = FALSE) +
+
+```{r waning-cond-hosp, width = 6, height = 6, out.width="100%", fig.cap = "Estimates for risk of COVID-19 hospitalization among individuals with laboratory-confirmed SARS-CoV-2 infections as a function of days since being fully vaccinated. The 99\\% point-wise estimates are included. Each pane shows a different age group and vaccine types are denoted by color. The BNT162b2 was not included due to small sample sizes."}
+fit_glm <- function(tab, alpha = 0.01, transf = function(x){ 1/(1+exp(-x))}){
+  tab <- filter(tab, day <= max.day)
+  knots <- min(tab$max.day)/2
+  fit <- glm(cbind(obs, poblacion-obs) ~ ns(day, knots= knots), 
+             family = "binomial", data = tab)
+  
+  pred <- predict(fit, se.fit = TRUE)
+  tab <- mutate(tab, fit = transf(pred$fit), 
+                conf.low = transf(pred$fit + qnorm(1-alpha/2) * pred$se.fit),
+                conf.high = transf(pred$fit - qnorm(1-alpha/2) * pred$se.fit))
+}
+
+hosp_fit <- waning_given_cases %>%  
+  filter(ageRange != "12-17" & manu != "JSN") %>%
+  group_by(manu, ageRange, day) %>%
+  summarize(poblacion = sum(poblacion), 
+            obs= sum(hosp), .groups = "drop") %>%
+  left_join(max_days, by = c("manu", "ageRange")) %>%
+  group_by(manu, ageRange) %>%
+  do(fit_glm(.)) %>%
+  ungroup()
+
+hosp_fit %>%
+  ggplot(aes(day, fit, ymin = conf.low, ymax = conf.high, color = manu, fill= manu)) +
+  geom_ribbon(alpha = 0.25, color = NA) +    
   geom_line() +
-  geom_hline(yintercept = 1, lty = 2) +
-  #scale_y_continuous(trans ="log2")  +
-  coord_cartesian(ylim=c(0.5, 32)) +
+  facet_wrap(~ageRange, nrow = 2) +
   scale_color_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
                     values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine")+
   scale_fill_manual(labels = c(manu_labels[["MOD"]], manu_labels[["PFR"]], manu_labels[["JSN"]]),
                     values = c(manu_colors[["MOD"]], manu_colors[["PFR"]], manu_colors[["JSN"]]), name = "Vaccine") +
-  labs(x="Days since fully vaccinated", y="Risk reduction (n-fold)")+theme_bw()+theme(legend.position = "bottom")
+  labs(x="Days since fully vaccinated", y="Risk of hospitalization \n given infection")+theme_bw()+theme(legend.position = "bottom")
+```
 
+
+```{r waning-cond-deaths, width = 6, height = 3.6, out.width="100%", fig.cap = "Estimates for risk of COVID-19 death among individuals with laboratory-confirmed SARS-CoV-2 infections as a function of days since being fully vaccinated. The 99\\% point-wise estimates are included. Each pane shows a different age group . The Ad26.COV2.S was not included due to small sample sizes.", out.width="75%"}
+deaths_fit <- waning_given_cases %>%  
+  filter(ageRange %in% c("65-74", "75-84", "85+"))  %>%
+  left_join(max_days, ageRange, by = c("ageRange", "manu")) %>%
+  group_by(ageRange, day) %>%
+  summarize(poblacion = sum(poblacion), 
+            obs= sum(deaths), max.day = min(max.day), 
+            .groups = "drop") %>%
+  group_by(ageRange) %>%
+  do(fit_glm(.)) %>%
+  ungroup()
+
+deaths_fit %>% 
+  ggplot(aes(day, fit, ymin = conf.low, ymax = conf.high)) +
+  geom_ribbon(alpha = 0.25, color = NA, show.legend = FALSE) +    
+  geom_line() +
+  facet_wrap(~ageRange, nrow = 1) +
+  coord_cartesian(ylim = c(0, 0.25))  +
+  labs(x="Days since fully vaccinated", y="Risk of hospitalization given infection")+theme_bw()+theme(legend.position = "bottom")
+```
+
+
+```{r exp-obs, fig.cap = "Reduction in risk provided by the different vaccines for individuals across age groups. The graph shows estimated expected outcomes based on estimated unvaccinated rates and those observed. A) COVID-19 hospitalizations. B) COVID-19 deaths.", fig.height=8, fig.height=6, out.width="100%" }
+p1 <- exp_obs %>% select(ageRange, manu, contains("hosp")) %>% 
+  filter(manu != "UNV") %>%
+  pivot_longer(cols = contains("hosp"), names_to = "status", values_to = "value") %>%
+  mutate(status = recode(status, hosp = "Observed", exp_hosp = "Expected")) %>%
+  ggplot(aes(ageRange, value, fill = status)) +
+  geom_bar(stat = "identity", width=.5, position = "dodge")  +
+  theme_bw() +
+  facet_wrap(~manu, labeller = as_labeller(vaccine_labeller)) +
+  ylab("COVID-19 hospitalizations") +
+  xlab("Age Group") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.title = element_blank(), legend.position = "none")+
+  ggtitle("A")
+   
+
+p2 <- exp_obs %>% select(ageRange, manu, contains("deaths")) %>% 
+  filter(manu != "UNV") %>%
+  pivot_longer(cols = contains("deaths"), names_to = "status", values_to = "value") %>%
+  mutate(status = recode(status, deaths = "Observed", exp_deaths = "Expected")) %>%
+  ggplot(aes(ageRange, value, fill = status)) +
+  geom_bar(stat = "identity", width=.5, position = "dodge")  +
+  theme_bw() +
+  facet_wrap(~manu, labeller = as_labeller(vaccine_labeller)) +
+  ylab("COVID-19 deaths") +
+  xlab("Age Group") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1), legend.title = element_blank(), legend.position = "bottom") +
+  ggtitle("B")
+
+gridExtra::grid.arrange(p1,p2)
 ```
 
 
 \pagebreak
 
-## Supplementary Tables {-}
+```{r,  width = 8, height = 3, out.width="100%"}
+cases_exp <- compute_expected(unvax, outcome = "cases") %>%
+  mutate(rate = fit / poblacion) %>%
+  select(date, ageRange, gender, rate)
 
+partial_eff_dat <- partial_eff %>% 
+  left_join(cases_exp, by = c("date", "ageRange", "gender")) %>%
+  mutate(exp = rate * poblacion) %>% 
+  group_by(delta, ageRange, manu, day) %>%
+  summarize(obs = sum(cases), exp = sum(exp), .groups = "drop")
 
-```{r hosp-cond-cases-tab, caption = "Estimated probability of hospitalizations and deaths from COVID-19 among individuals infected with SARS-CoV-2 with 95\\% confidence intervals.  Note that not all hospitalizations are reported to the BioPortal database."}
-bind_rows(mutate(hosp_by_cases, Outcome = "Hospitalization"),
-          mutate( deaths_by_cases, Outcome = "Deaths")) %>%
-  relocate("Outcome") %>% 
-  mutate(rate = paste0(make_pct(rate,1), " (", make_pct(conf.low,1), ",", make_pct(conf.high,1), ")")) %>%
-  select(Outcome, ageRange, group, rate)  %>%
-  mutate(group = recode(group, UNV="Unvaccinated", MOD = manu_labels[["MOD"]], PFR = manu_labels[["PFR"]])) %>%
-  pivot_wider(names_from=group, values_from = rate) %>%
-  rename("Age group" = "ageRange") %>%
-  kableExtra::kbl(align = c("l", "l", "r", "r", "r"), booktabs = TRUE,
-                    linesep = "", longtable = TRUE, caption = "Estimated probability of hospitalizations and deaths from COVID-19 among individuals infected with SARS-CoV-2. Note that the mRNA-1273 vaccine is not approved for individuals younger than 18. Thus no  probabilities are reported for the 12-17 age group for this vaccine.") %>% 
-  kableExtra::kable_styling(latex_options = c("striped","HOLD_position")) 
+partial_eff_dat %>% 
+  mutate(ageRange = fct_collapse(ageRange, "65+" = c("65-74","75-84", "85+")))%>%
+  filter(manu != "JSN") %>%
+  group_by(day, ageRange) %>%
+  summarize(obs = sum(obs), exp = sum(exp), .groups = "drop") %>%
+  mutate(ve = 1-obs/exp, 
+         conf.low = 1-qpois(0.025, obs)/exp,
+         conf.high = 1-qpois(0.975, obs)/exp) %>%
+  ggplot(aes(day, ve, ymin = conf.low, ymax = conf.high)) + 
+  geom_errorbar() +
+  geom_point() +
+  xlab("Days since fully vaccinated") +
+  ylab("Vaccine effectiveness") +
+  facet_wrap(~ageRange, ncol = 4) +
+  geom_hline(yintercept = 0, lty = 2) + 
+  theme_bw() +
+  ggtitle("A")
+
 ```
+
+```{r confounder-check, fig.cap = "We computed vaccine effectiveness, defined as 1 minus observed laboratory-confirmed SARS-CoV-2 infections divided by what is expected without vaccination, for each day since being fully vaccinated. A) Data for the mRNA-1273 and BNT162b2 were combined and results are shown for each age group. B) Data for Ad26.COV2.S with age groups combined to provide statistical power."}
+partial_eff_dat %>% 
+  filter(manu == "JSN" & ageRange != c("12-17")) %>%
+  mutate(ageRange = fct_collapse(ageRange, 
+                        "18-64" = age_levels[2:6],
+                        "65+" = age_levels[7:9])) %>%
+  mutate(day = ifelse(ageRange == "65+", floor(day/5)*5 +2.5, day)) %>%
+  group_by(day, ageRange) %>%
+  summarize(obs = sum(obs), exp = sum(exp), .groups = "drop") %>%
+  mutate(ve = 1-obs/exp, 
+         conf.low = 1-qpois(0.025, obs)/exp,
+         conf.high = 1-qpois(0.975, obs)/exp) %>%
+  ggplot(aes(day, ve, ymin = conf.low, ymax = conf.high))+
+  geom_errorbar() +
+  geom_point() +
+  facet_wrap(~ageRange, ncol = 4) +
+  coord_cartesian(ylim=c(-1,1)) + 
+  geom_hline(yintercept = 0, lty = 2) + 
+  xlab("Days since fully vaccinated") +
+  ylab("Vaccine effectiveness") +
+  theme_bw() +ggtitle("B")
+```
+
+
+
+\pagebreak
+
+## Supplementary Tables 
+
 
 ```{r tab-1}
-kableExtra::kbl(rollout, booktabs=T, caption="Chronology of the COVID-19 vaccine rollout in Puerto Rico.") %>%
-  column_spec(2, width = "12cm")%>% 
-  kable_styling(latex_options = c("HOLD_position", "striped"))
+flextable(rollout) %>%
+ set_caption("Chronology of the COVID-19 vaccine rollout in Puerto Rico.") %>%
+  width(j=1, 0.85) %>%
+  width(j=2, 6) %>%
+ fontsize(size=8)
+
+
+```
+
+\pagebreak
+```{r vax-before-after-delta}
+bind_rows(mutate(daily_counts_onedose_age_gender_manu, status = "first"),
+          mutate(daily_counts_vax_age_gender_manu, status = "full")) %>%
+  mutate(manu = droplevels(manu)) %>%
+  mutate(delta = factor(if_else(date < delta_date, "before", "after"), 
+                        levels = c("before","after"))) %>%
+  group_by( status, manu,delta, ageRange) %>%
+  summarize(n = sum(vax), .groups = "drop")  %>% 
+  mutate(n = ifelse(manu!="PFR" & ageRange == "12-17", "-", make_pretty(n)))%>%
+  mutate(manu = recode(manu, MOD = manu_labels[["MOD"]], PFR = manu_labels[["PFR"]], JSN = manu_labels[["JSN"]]),
+         delta = recode(delta, before = paste("before", format(delta_date, "%B %e")),
+                        after = paste("after", format(delta_date, "%B %e"))),
+                    status = recode(status, first = "First dose", full = "Fully vaccinated")) %>%
+  mutate(delta = paste(status, delta))  %>%
+  select(-status) %>%
+  pivot_wider(names_from = "delta", values_from = n) %>%
+  rename("Age group" = ageRange, Manufacturer = manu) %>%
+  flextable() %>%
+  set_caption(paste0("Number of individuals, by age group, receiving the first or dose or being fully vaccinated before and after ",
+                     format(delta_date, "%B %e, %Y"), " when Delta variant becaome dominant in Puerto Rico.")) %>%
+  align(j=1:3, align = "center", part = "all") %>%
+  align(j=3:6, align = "right", part = "all") %>%
+  width(j=1, 1) %>%
+  width(j=2, .75) %>%
+  width(j=3:6, 1) %>%
+  fontsize(size = 10) 
 ```
 
 
+\pagebreak
 ```{r overall}
 tmptab <- data.frame(vax = c("Total",
                              "Unvaccinated",
@@ -838,48 +739,108 @@ tmptab <- data.frame(vax = c("Total",
                                 make_pretty(filter(vax_cases_tots, manu == "JSN")$deaths))
 )
 
-names(tmptab) <- c("",
+names(tmptab) <- c(" ",
                    "Person years",
                    "Cases",
                    "Hospitalizations",
                    "Deaths")
 
 tmptab <- tmptab[c(1,2,4,3,5),]
-kableExtra::kbl(tmptab, 
-                caption = paste0("Person years, infections, hospitalizations, and deaths from ", format(first_vax_day, "%B %e, %Y"), ", the first day that indivuals were fully vaccinated, to ", format(last_day, "%B %e, %Y"), "by vaccination group."), 
-                align = c("l","r","r","r","r"),
-                booktabs = TRUE, row.names = F) %>%
-  kable_styling(full_width = TRUE, latex_options = c("HOLD_position", "striped")) 
-#%>%
-#  kableExtra::add_footnote(label = "A breakthrough infection happens when a fully #vaccinated person gets infected with SARS-CoV-2. The first breakthrough infections in #Puerto Rico started on January 18, 2021, two weeks after the second dose of those #vaccinated during the first day of the vaccine rollout.")
+flextable(tmptab) %>%
+  set_caption(paste0("Person years, SARS-CoV-2 infections (cases), hospitalizations, and deaths from ", 
+                     format(first_vax_day, "%B %e, %Y"), ", the first day that individuals were fully vaccinated, to ", 
+                     format(last_day, "%B %e, %Y"), " by vaccination group.")) %>%
+  align(j=1, align = "left", part = "all") %>%
+  align(j=2:5, align = "right", part = "all") %>%
+  width(j=1, 1.25) %>%
+  width(j=2, 2) %>%
+  width(j=3:5, 1) %>%
+  fontsize(size = 10)  %>% fit_to_width(max_width = 7)
 ```
 
-
-
-```{r waning-tab} 
-d <- waning_tab %>% 
-  mutate("Vaccine" = ifelse(manu=="PFR", manu_labels[["PFR"]], 
-                                 ifelse(manu=="MOD", manu_labels[["MOD"]], 
-                                        manu_labels[["JSN"]])),
-    "Peak day" = day, 
-    "Peak effectiveness (CI)" = paste0(make_pct(max), 
-                            " (", make_pct(max.lo), " - ",
-                             make_pct(max.up), ")"),
-    "Length of period examined" = paste(days, "days"),
-     "Effectiveness (CI) at end of period" = paste0(make_pct(min), 
-                            " (", make_pct(min.lo), " - ",
-                             make_pct(min.up), ")")
-         ) %>%
-  dplyr::select(`Vaccine`, `Peak effectiveness (CI)`, 
-                `Length of period examined`,
-               `Effectiveness (CI) at end of period`) %>%
-  arrange(factor(Vaccine, levels=plot_manu_levels))
-
-kableExtra::kable(d,align = c("l","c","c", "c"), booktabs = TRUE, caption = "Waning effectiveness against infection with 99\\% point-wise confidence intervals. The periods examined due to the fact that different vaccines were approved at different times and have different times since first dose to being fully vaccinated.") %>%
-  # column_spec(2,border_left = T) %>%
-  # column_spec(4,border_left = T) %>%
-  kable_styling(latex_options = c("HOLD_position", "striped"))
+\pagebreak
+```{r hosp-cond-cases-tab, fit.cap = "Estimated probability of hospitalizations and deaths from COVID-19 among individuals infected with SARS-CoV-2 with 95\\% confidence intervals."}
+bind_rows(mutate(hosp_by_cases, Outcome = "Hospitalization"),
+          mutate( deaths_by_cases, Outcome = "Deaths")) %>%
+  relocate("Outcome") %>% 
+  mutate(rate = paste0(format(round(rate,2), digits = 2, nsmall =2), 
+                       " (", format(round(conf.low,2), digits = 2, nsmall =2), ",", 
+                       format(round(conf.high,2), digits = 2, nsmall =2), ")")) %>%
+  select(Outcome, ageRange, group, rate)  %>%
+  mutate(group = recode(group, UNV="Unvaccinated", MOD = manu_labels[["MOD"]], PFR = manu_labels[["PFR"]], JSN = manu_labels[["JSN"]])) %>%
+  pivot_wider(names_from=group, values_from = rate, values_fill = "-") %>%
+  rename("Age group" = "ageRange") %>%
+  flextable() %>%
+  set_caption("Estimated probability of hospitalizations and deaths from COVID-19 among individuals infected with SARS-CoV-2. Note that the mRNA-1273 vaccine is not approved for individuals younger than 18. Thus no  probabilities are reported for the 12-17 age group for this vaccine.") %>%
+  align(j=1:2, align = "left", part = "all") %>%
+  align(j=3:5, align = "center", part = "all") %>%
+  width(j=1, 1.25) %>%
+  width(j=2, 0.9) %>%
+  width(j=3:6, 1.25) %>%
+  fontsize(size = 10) %>% fit_to_width(max_width = 7)
 ```
 
+\pagebreak
+
+## Supplementary Methods
+
+### Data sources 
+
+Two Puerto Rico Department of Health databases were integrated: the BioPortal, which stores laboratory SARS-CoV-2 test results, most COVID-19 hospitalizations, and COVID-19 deaths, and the Puerto Rico Electronic Immunization System (PREIS), which stores vaccination related data, including COVID-19 vaccination. The Department of Health used full names (including maternal last names), date of birth, and municipalities to match the two databases. Because over 200 billion records needed to be compared, an algorithm was developed to do this automatically. Using a smaller subset curated by a human, we determined the algorithm to provide matches that well over 99.99% accurate. 
+
+The code for the matching algorithm is available at https://github.com/rafalab/vax-eff-pr. However, the data is not available as it contains personal identifiers.
+
+### Statistical analyses
+
+We applied models that accounted for age, gender, and, since many more tests were performed on weekdays than weekends, day of the week. We used the estimates obtained from fitting these models to quantify effectiveness against a SARS-CoV-2 infection and relative risks for COVID-19 hospitalizations and deaths. The models used for the different analyses are described below. 
+
+#### Time-varying effectiveness against a laboratory-confirmed SARS-CoV-2 infection by age group and vaccine manufacturer
+
+&nbsp;
+
+We defined $Y^{(v)}_{t,d,a,g}$ as the number of laboratory confirmed SARS-CoV-2 infections observed on day $t$ for individuals of gender $g$ (male or female)
+and age group $a$ (`r str_replace(paste(levels(counts_cases$ageRange), collapse=", "), ", 85", ", or 85")`),
+that were fully vaccinated with vaccine $v$ (`r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`, or `r manu_labels[["JSN"]]`), $d$ days previous to the positive test. We assumed these counts followed an over-dispersed Poisson distribution with expected rate defined by
+
+
+\begin{equation}
+\mbox{E}\left(Y^{(v)}_{t,d,a,g}\right) = N^{(v)}_{t,d,a,g} \, \mu_{a,g}(t) \, \exp\left\{\beta^{(v)}_{a}(d)\right\}.
+(\#eq:model)
+\end{equation}
+
+Here $N^{(v)}_{t,d,a,g}$ is the population size on day $t$ of individuals of gender $g$, age group $a$ that were fully vaccinated with vaccine $v$, $d$ days before day $t$, $\mu_{a,g}(t)$ is the incidence rate on date $t$ among the non-vaccinated individuals of gender $g$ and age $a$, and $\beta^{(v)}_{a}(d)$ is the age-specific log relative risk of vaccine $v$, $d$ days after the first dose was administered. Note the the transformation  $f(x) = 1 - \exp(x)$ can be used to convert the $\beta$ (log relative risks) to effectiveness. Since incidence changes across demographic groups and across days of the week (more tests performed on Mondays and less on Sundays, for example) we modeled the $\mu_{a,g}(t)$ as 
+
+$$
+\log\{\mu_{a,g}(t) \}=  \alpha_i + f_a(t) + \sum_{w=1}^7 \gamma_{w} 1_{w}(t)  \mbox{ with } \sum_{g=1}^2 \alpha_{g} = 0  \mbox{ and } \sum_{w=1}^7 \gamma_{w} = 0
+$$
+
+with $\alpha_{g}$ a gender effect, $f_a(t)$ a cubic-spline representing an age-specific trend that accounts for the 
+change in incidence across time, and $1_{w}(t)=1$ indicator functions for each day of the week $w \in \{\mbox{Sunday}, \mbox{Monday}, \dots \mbox{Friday}\}$. To estimate $\mu_{a,g}(t)$ we assumed laboratory-confirmed SARS-CoV-2 infections counts for non-vaccinated individuals, denoted with $Y^{(u)}_{a,g}$, follow a Poisson distribution with rate $\mu_{a,g}(t)$ and  obtained the MLE for all parameters using Iteratively Reweighted Least Square algorithm, as implemented by the _glm_ function in R. We then used these to define the MLE for $\mu_{a,g}(t)$ and denoted it with $\hat{\mu}_{a,g}(t)$. With this estimate in place we then estimated the parameter of interest $\beta_a^{(v)}$ by treating $\mu_{a,g}(t)$ in \@ref(eq:model) as a known value, plugged in $\hat{\mu}_{a,g}(t)$, and noting that 
+$\sum_{t} Y^{(v)}_{t,d,a,g}$ follows a Poisson distribution with expected value 
+
+\begin{equation}
+\mbox{E}\left\{\sum_{t} Y^{(v)}_{t,d,a,g}\right\} = \left\{\sum_{t} N^{(v)}_{t,d,a,g} \mu_{a,g}(t)\right\} \, \exp\left\{\beta^{(v)}_{a}(d)\right\}.
+(\#eq:sum)
+\end{equation}
+
+Because the first term on the right is treated as known, if we assume $\beta^{(v)}_{a}(d)$ is a cubic-spline, then the model defined by \@ref(eq:sum) is reduced to a simple generalized linear model and we find the MLE $\beta^{(v)}_{a}(d)$ again using Iteratively Reweighted Least Square.
+
+Note that we can use this model for the hospitalization and deaths outcomes by simply redefining the counts $Y^{(v)}_{t,d,a,g}$ based on counts of these outcomes.
+
+#### COVID-19 hospitalization and death relative risk conditioned on a laboratory confirmed SARS-CoV-2 infection 
+
+&nbsp;
+
+Note: in this section, to avoid introducing more mathematical symbols, we repurpose the $Y, N, \alpha, \beta$ and $\gamma$ notation and, because  we fit a model separately to each age group, we do not use the $a$ index. 
+
+To estimate the further protection provided by the vaccine in reducing hospitalization and deaths among infected individuals we examined the proportion of cases that had hospitalizations or deaths. To do this we defined $N_{i,d}$ as the number of laboratory-confirmed SARS-CoV-2 infections on day $d$ for group $i$. Groups were defined by gender (male or female) and vaccination status (unvaccinated, `r manu_labels[["MOD"]]`, `r manu_labels[["PFR"]]`. or  `r manu_labels[["JSN"]]`).  We defined $Y_{i,d}$ as the number of these that had the hospitalization or death outcome. We then assumed that $Y_{i,d}$ followed a binomial distribution with $N_{i,t}$ trials and success probability $p_{i,d}$ defined by:
+
+
+$$
+\log{\frac{p_{i,d}}{1-p_{i,d}}} = \alpha_{g}  + \beta^{(v)}_{i}(d)  \mbox{ with } \sum_{g=1}^2 \alpha_{g} = 0 
+$$
+
+
+with $\alpha_{g}$ a sex effect and  $\beta_a^{(v)}(d)$ the time-varying conditional risk vaccination status $v$. We fit this model using the Iteratively Reweighted Least Square algorithm. In our analysis we first fit the model without the $\alpha_{g}$ and exclude the `r manu_labels[["JSN"]]` vaccine data  due to small sizes obtained after stratifying by age group, and, for deaths, we combined the  `r manu_labels[["MOD"]]`, or `r manu_labels[["PFR"]]` data. After not finding strong evidence in favor of the need for time-varying effect, we fit a version of the model with $\beta_a^{(v)}(d)$ a constant with respect to $d$ to each vaccine group, but this time including the sex effect and for all three vaccines.
 
 

@@ -1,0 +1,20 @@
+Date	Event
+2020-12-12	BNT162b2 COVID-19 vaccine (Pfizer-BioNTech) receives Emergency Use Authorization (EUA). 
+2020-12-15	The COVID-19 vaccine rollout begins with phase 1A which included  healthcare workers, communities in long term care facilities and intellectual disabilities care facilities.
+2020-12-18	mRNA-1273 COVID-19 vaccine (Moderna) receives EUA.
+2021-01-11	Phase 1B commences with the vaccination of adults 65 and  older.
+2021-02-02	Puerto Rico's Secretary of Health signs administrative order establishing that for the next 28 days, vaccination will be  exclusive for those 65 and older.
+2021-03-03	Ad26.COV2.S COVID-19 vaccine (Johnson & Johnson) receives EUA.
+2021-03-11	Secretary of Health  signs  administrative order establishing that for the following 30 days, first doses are to be administered exclusively to adults 60 and older with certain chronic conditions.
+2021-03-17	Secretary of Health signs administrative order establishing that for the following 30 days, first doses are to be administered  exclusively to adults 60 and older and 50 to 59 year olds  with  chronic conditions.
+2021-03-17	Secretary of Health signs executive order authorizing the  vaccination of personnel in food industry, drug companies, medical  equipment, the public transport sector, air transport and maritime cargo.
+2020-03-29	Phase 1C begins with the vaccination of people 50 and older  and 35 and older with chronic conditions. 
+2021-04-12	Phase 3 begins with vaccination available to everyone 16 and older. 
+2021-05-12	CDC recommends vaccination for people 12 years and older. 
+2021-07-22	Secretary of Health signs administrative order stating that students 12 years and older must be vaccinated with at least one dose for in-person class in schools and universities. Similarly, school and university employees and contractors must be fully vaccinated.
+2021-07-28	Governor signs executive order establishing that all public agencies of the Executive Branch shall require employees who work in-person to receive a COVID-19 vaccine.
+2021-07-29	Secretary of Health signs administrative order stating that 1) every public employee who works in person or remotely must be fully vaccinated by September 30, 2021, and 2) that every contractor who works with the Puerto Rico Department of Health must be fully vaccinated by September 30, 2021.
+2021-08-05	Governor signs executive order requiring contractors and their employees who work in-person or frequently visit their offices, 2) all employees of the healthcare facilities, 3) all employees of hotels, paradores, and lodgings, and 3) all guests of hotels, paradores, lodgings, and short-term rentals to receive a COVID-19 vaccine.
+2021-08-09	Secretary of Health signs administrative order stating that school and university employees and contractors must be fully vaccinated. However, if they fall within the religious or health exemptions category, they must present a weekly negative SARS-CoV-2 test.
+2021-08-11	Governor signs executive order stating that any establishment-either indoor or outdoor-that sells prepared food or drink (eg. restaurants and chinchorros), must require all employees who work there in person to be fully vaccinated with a COVID-19 vaccine and that from August 23rd 2021, food businesses have two options 1) 100% capacity if business visitors present COVID-19 vaccination card, negative antigen or molecular test or a positive antigen or molecular test and a certificate of recovery for visitors who have had an infection, or 2) 50% capacity if business does not require any evidence from visitors.
+2021-08-19	Governor signs executive order establishing that beauty salons, barber shops, aesthetics salons, spas, gyms, childcare centers, grocery stores, convenience stores, casinos, and gas stations must require and ensure that all employees who work there in person to be fully vaccinated with a COVID-19 vaccine.

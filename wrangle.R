@@ -10,7 +10,17 @@ analysis_last_day <- last_day
 load("rdas/population-tabs.rda")
 load("rdas/dat_cases_vax.rda")
 load("rdas/dat_vax.rda")
+load("rdas/cases_3_months.rda")
 
+pop_by_age_gender <- cases %>% 
+  filter(gender %in% c("F", "M") & !is.na(ageRange)) %>%
+  filter(ageRange != "0-11") %>%
+  left_join(pop_by_age_gender, by = c("ageRange", "gender")) %>%
+  mutate(poblacion = poblacion - cases) %>%
+  select(-cases) %>%
+  filter(date >= first_day & date <= analysis_last_day)
+
+rm(cases)
 ### VACCINE COUNTS
 
 # Creates all variable combinations that will be used
@@ -80,11 +90,11 @@ counts_onedose_age_gender_manu <-
 
 ## Population of unvaccinated individuals by age Range, date and gende
 
-unvax <- counts_onedose_age_gender_manu %>%
+pop_unvax <- counts_onedose_age_gender_manu %>%
   group_by(date, ageRange, gender) %>%
   summarize(total = sum(vax), .groups = "drop") %>%
   ungroup() %>%
-  left_join(pop_by_age_gender, by = c("ageRange", "gender")) %>%
+  left_join(pop_by_age_gender, by = c("date", "ageRange", "gender")) %>%
   mutate(poblacion = poblacion - total, manu = "UNV") %>%
   select(-total)
 
@@ -92,16 +102,16 @@ unvax <- counts_onedose_age_gender_manu %>%
 
 pop_age_gender_manu <- counts_vax_age_gender_manu %>%
   rename(poblacion = vax) %>%
-  bind_rows(unvax) %>%
+  bind_rows(pop_unvax) %>%
   mutate(manu = factor(manu, levels = manu_levels)) %>%
   arrange(date, ageRange,  manu, gender)
 
-rm(unvax) # removes unvax from environment; no longer needed
+rm(pop_unvax) # removes unvax from environment; no longer needed later we use the variable name again some unvax cases
 
 ## Individual case level information with number of days between case detection and 
 ## vaccination status (VAX, PAR, UNV)
 
-dat <- dat_cases_vax %>% 
+dat_cases <- dat_cases_vax %>% 
   filter(!is.na(ageRange) & !is.na(gender)) %>%
   replace_na(list(manu = "UNV")) %>%
   filter(date <= analysis_last_day &
@@ -110,15 +120,17 @@ dat <- dat_cases_vax %>%
   mutate(status = case_when(date > dose_2 + days(wait) ~ "VAX",
                             date > dose_1 ~ "PAR",
                             TRUE ~ "UNV")) %>%
-  filter(status != "PAR") %>%
   mutate(manu = ifelse(status == "UNV", "UNV", manu)) %>%
-  mutate(manu = factor(manu, levels = manu_levels)) %>%
+  mutate(manu = factor(manu, levels = manu_levels)) 
+  
+vax <- dat_cases %>%
+  filter(status != "PAR") %>%
   mutate(day = as.numeric(date) - as.numeric(dose_2+days(wait)))
 
 ## Counts the number of cases, hosp and deaths by vaccine manufacturer and status, 
 ## age range, gender
 
-counts_cases <- dat %>%
+counts_cases <- vax  %>%
   group_by(date, ageRange, gender, manu) %>% 
   summarize(cases = n(), hosp = sum(hosp), deaths = sum(death), .groups = "drop") %>% 
   filter(date >= first_day & date <= analysis_last_day) %>%
@@ -139,7 +151,7 @@ pop_unvax <- daily_counts_onedose_age_gender_manu %>%
   filter(date >= first_day & date <= analysis_last_day) %>%
   group_by(date, ageRange, gender) %>%
   summarize(poblacion = sum(vax), .groups = "drop") %>%
-  left_join(the_pop, by = c("ageRange", "gender")) %>%
+  left_join(the_pop, by = c("date", "ageRange", "gender")) %>%
   group_by(ageRange, gender) %>%
   arrange(date) %>%
   mutate(poblacion = total_pop - cumsum(poblacion)) %>%
@@ -149,11 +161,10 @@ pop_unvax <- daily_counts_onedose_age_gender_manu %>%
   ## check
   # pop_unvax %>% ggplot(aes(date, poblacion, color = ageRange,lty=gender)) + geom_line()
 
-unvax <- dat %>% 
-  filter(manu == "UNV") %>% 
+unvax <- dat_cases %>% 
+  filter(status == "UNV") %>% 
   group_by(date, ageRange, gender) %>%
-  summarize(cases = n(), hosp = sum(!is.na(date_hosp)), 
-            deaths = sum(death), .groups = "drop")  %>%
+  summarize(cases = n(), hosp = sum(hosp), deaths = sum(death), .groups = "drop")  %>%
   right_join(pop_unvax, by = c("date", "ageRange", "gender")) %>%
   replace_na(list(cases = 0, hosp = 0, deaths = 0)) 
   ## check
@@ -181,14 +192,64 @@ pop_vax <- daily_counts_vax_age_gender_manu %>%
 
 ## Now we will add the number of cases for each date/day combination with at least one vaccinated
 
-waning <- dat %>% 
-  filter(day>0 & day < ndays) %>%
+waning <- vax %>% 
+  filter(status == "VAX" & day <= ndays) %>%
   group_by(manu, ageRange, gender, date, day) %>% 
-  summarize(cases = n(), hosp = sum(!is.na(date_hosp)), 
-            deaths = sum(death), .groups = "drop")  %>%  
+  summarize(cases = n(), hosp = sum(hosp), deaths = sum(death), .groups = "drop")  %>%  
   right_join(pop_vax, by = c("manu", "ageRange", "gender", "date", "day")) %>% # adding vaccinated population
   replace_na(list(cases = 0, hosp = 0, deaths = 0)) %>%
   mutate(delta = factor(if_else(date - day < delta_date, "before", "after"), levels = c("before", "after"))) %>%
   arrange(manu, ageRange, day, date) %>%
   mutate(manu = factor(manu, levels = manu_levels))
+
+
+
+### waining effectivenss against deaths and hospitalizaeions given being a case
+
+# ### WANING Hosp and deaths given cases
+unvax_given_cases <- unvax %>% select(-poblacion) %>%
+  rename(poblacion = cases)
+
+tmp_combs <- pop_vax %>% select(-poblacion) 
+waning_given_cases <- vax %>% 
+  filter(status == "VAX" & day <= ndays)  %>%
+  group_by(manu, ageRange, gender, date, day) %>%
+  summarize(poblacion = n(), hosp = sum(hosp), deaths = sum(death), 
+            .groups = "drop")  %>% 
+  right_join(tmp_combs, by = c("manu", "ageRange", "gender", "date", "day")) %>%
+  replace_na(list(poblacion = 0, hosp = 0, deaths = 0)) %>%
+  mutate(delta = factor(if_else(date - day < delta_date, "before", "after"), levels = c("before", "after"))) %>%
+  arrange(manu, ageRange, day, date) %>%
+  mutate(manu = factor(manu, levels = manu_levels))
+
+rm(vax, pop_vax, pop_unvax, tmp_combs)
+
+##############
+## compute effectiveness for partially vaccinated
+###########
+partial_pop_vax <- daily_counts_onedose_age_gender_manu %>%
+  filter(date >= first_day & date <= analysis_last_day) %>%
+  group_by(date, ageRange, gender, manu) %>%
+  summarize(poblacion = sum(vax), .groups = "drop") %>%
+  group_by(manu, ageRange, gender) %>%
+  do(add_days(., n = ndays))
+
+ndays <- 28
+
+partial <- dat_cases %>%
+  filter(status != "VAX" | (status == "VAX" | manu == "JSN")) %>%
+  mutate(day = as.numeric(date) - as.numeric(dose_1)) %>%
+  filter(day <= ndays)
+
+partial_eff <- partial %>% 
+  group_by(manu, ageRange, gender, date, day) %>% 
+  summarize(cases = n(), hosp = sum(hosp), deaths = sum(death), .groups = "drop")  %>%  
+  right_join(partial_pop_vax, by = c("manu", "ageRange", "gender", "date", "day")) %>% # adding vaccinated population
+  replace_na(list(cases = 0, hosp = 0, deaths = 0)) %>%
+  filter(day>0 & day <= ndays) %>%
+  mutate(delta = factor(if_else(date - day < delta_date, "before", "after"), levels = c("before", "after"))) %>%
+  arrange(manu, ageRange, day, date) %>%
+  mutate(manu = factor(manu, levels = manu_levels))
+
+rm(partial, partial_pop_vax, ndays)
 

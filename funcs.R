@@ -53,13 +53,12 @@ fit_waning_model <- function(tab, knots = NULL, alpha = 0.01, transf = function(
   
   max.day <- unique(tab$max.day)
   if(is.null(knots)){
-    knots <- seq(1, max.day, len=round(max.day/28))
-    knots <- knots[-c(1, length(knots))]
+    knots <- max.day/2 
   }
   
   tab <- filter(tab, day <= max.day)
   
-  fit <- glm(obs ~ ns(day, knots = knots), offset = log(exp), family = "poisson", data = tab)
+  fit <- glm(obs ~ ns(day, knots = knots), offset = log(exp), family = "quasipoisson", data = tab)
   
   pred <- predict(fit, newdata = list(day=tab$day, exp = 1), se = TRUE)
   
@@ -78,9 +77,9 @@ fit_prob_model <- function(tab, outcome = "hosp", group = "manu"){
     rename(group = !!sym(group)) %>%
     filter(cases>0)
   
-  fit <- glm(cbind(obs, cases - obs) ~  gender + wd + group,
+  fit <- glm(cbind(obs, cases - obs) ~  gender  + group,
                family = "binomial", data = dat,
-             contrasts = list(wd = contr.sum, gender = contr.sum))
+             contrasts = list(gender = contr.sum))
     
   the_names <- c("(Intercept)", paste0("group", fit$xlevels$group[-1]))
 
@@ -97,20 +96,6 @@ fit_prob_model <- function(tab, outcome = "hosp", group = "manu"){
     conf.high = ilogit(estimate+qt(0.975, fit$df.residual) * se))
 }
  
-
-fit_model <- function(tab,  days.between.knots = 21){
-  
-  df <- round(length(unique(tab$date))/days.between.knots)
-  
-  dat <- mutate(tab, wd = factor(wday(date, label = TRUE))) %>%
-    mutate(x = as.numeric(date)-min(as.numeric(date))) %>%
-    filter(poblacion > 0)
-  
-  glm(obs ~ gender + wd + ageRange * ns(x, df = df) + group, 
-             offset = log(poblacion), family = "quasipoisson", 
-             contrasts = list(wd = contr.sum, gender = contr.sum),
-             data = dat)
-}
 
 get_age <- function(x) as.numeric(str_extract(x, "^\\d+"))
 
@@ -348,24 +333,4 @@ simplify_proveedor <- function(x, col_name = "proveedor") {
                                      str_detect(proveedor, "CDT") ~ "CDTs",
                                      str_detect(proveedor, "DR ") ~ "Doctores",
                                      TRUE ~ "Otros"))
-}
-
-fit_onedose_waning_model <- function(tab, knots = NULL, alpha = 0.01, transf = function(x){ 1-(1/exp(-x)) }){
-  
-  if(is.null(knots)){
-    #knots <- c(4, 8, 12, seq(28, 210, 28))
-    knots <- c(7, seq(14, max(tab$day), 28))
-    knots <- knots[knots< unique(tab$max.day)]
-  }
-  
-  tab <- filter(tab, day <= max.day)
-  
-  fit <- glm(obs ~ ns(day, knots = knots), offset = log(exp), family = "poisson", data = tab)
-  
-  pred <- predict(fit, newdata = list(day=tab$day, exp = 1), se = TRUE)
-  
-  mutate(tab, 
-         fit = transf(pred$fit),
-         conf.low = transf(pred$fit + qnorm(1-alpha/2) * pred$se.fit),
-         conf.high = transf(pred$fit - qnorm(1-alpha/2) * pred$se.fit))
 }
